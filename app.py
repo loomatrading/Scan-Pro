@@ -44,7 +44,7 @@ def detect_document_corners(image):
     h, w = image.shape[:2]
     scale = min(1.0, 1400.0 / max(h, w))
     small = cv2.resize(image, None, fx=scale, fy=scale,
-                       interpolation=cv2.INTER_AREA) if scale < 1 else image.copy()
+                           interpolation=cv2.INTER_AREA) if scale < 1 else image.copy()
 
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -122,35 +122,31 @@ def perspective_transform(image, corners):
 
 
 def document_ai_enhance(img):
-    """Scanner-style enhancement: denoise, illumination correction, local contrast and sharpening."""
+    """Clean scanner effect: illumination correction, shadow & wrinkle removal, pure white background."""
     if img is None:
         return None
 
-    # Work in LAB for stable document contrast.
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
+    # 1. Convert to Grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # 2. Estimate and remove uneven illumination/wrinkles/shadows
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (51, 51))
+    morph = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    
+    # Division to normalize paper surface background
+    norm = cv2.divide(gray, morph, scale=255.0)
+    norm = np.uint8(norm)
+
+    # 3. Enhance Contrast (CLAHE) for text sharpness without artifacting background
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    result = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+    enhanced = clahe.apply(norm)
 
-    # Remove camera noise while preserving text edges.
-    result = cv2.fastNlMeansDenoisingColored(result, None, 3, 3, 7, 21)
+    # 4. Clean background completely to pure white (255)
+    _, final_gray = cv2.threshold(enhanced, 215, 255, cv2.THRESH_TRUNC)
+    final_gray = cv2.normalize(final_gray, None, 0, 255, norm_type=cv2.NORM_MINMAX)
 
-    # Even out shadows/light falloff on paper.
-    gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-    background = cv2.GaussianBlur(gray, (0, 0), 25)
-    background = np.maximum(background, 1)
-    normalized = cv2.divide(gray, background, scale=235)
-    normalized = cv2.normalize(normalized, None, 0, 255, cv2.NORM_MINMAX)
-
-    hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV)
-    hsv[:, :, 2] = normalized
-    result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-
-    # Gentle unsharp mask for text clarity.
-    blur = cv2.GaussianBlur(result, (0, 0), 1.0)
-    result = cv2.addWeighted(result, 1.18, blur, -0.18, 0)
-    return result
+    # Convert back to 3-channel BGR image
+    return cv2.cvtColor(final_gray, cv2.COLOR_GRAY2BGR)
 
 
 def ai_super_resolution(img):
