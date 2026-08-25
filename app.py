@@ -122,7 +122,7 @@ def perspective_transform(image, corners):
 
 
 def document_ai_enhance(img):
-    """Clean scanner effect: illumination correction, shadow & wrinkle removal, pure white background."""
+    """Clean scanner effect: illumination correction, shadow & wrinkle removal, pure white background and clean borders."""
     if img is None:
         return None
 
@@ -144,6 +144,17 @@ def document_ai_enhance(img):
     # 4. Clean background completely to pure white (255)
     _, final_gray = cv2.threshold(enhanced, 215, 255, cv2.THRESH_TRUNC)
     final_gray = cv2.normalize(final_gray, None, 0, 255, norm_type=cv2.NORM_MINMAX)
+
+    # 5. Clean outer borders (Remove dark frame edges/artifacts around margins)
+    h, w = final_gray.shape
+    margin_x = max(1, int(w * 0.015))
+    margin_y = max(1, int(h * 0.015))
+    
+    # Set outer 1.5% margins to solid white
+    final_gray[:margin_y, :] = 255
+    final_gray[-margin_y:, :] = 255
+    final_gray[:, :margin_x] = 255
+    final_gray[:, -margin_x:] = 255
 
     # Convert back to 3-channel BGR image
     return cv2.cvtColor(final_gray, cv2.COLOR_GRAY2BGR)
@@ -268,7 +279,7 @@ class ScanPro(QMainWindow):
         QPushButton#tool:hover { background:#E8E8E8; }
         QPushButton#tool[selected='true'] { background:#D9F7F1; border:1px solid #10B99A; }
         QLabel#toolText { font-size:14px; }
-        QPushButton#save { background:#10B99A; color:white; border-radius:8px; font-size:22px; min-width:180px; min-height:50px; }
+        QPushButton#save { background:#10B99A; color:white; border-radius:8px; font-size:18px; font-weight:bold; min-width:160px; min-height:45px; padding:0 20px; }
         QPushButton#save:hover { background:#0DAE91; }
         QPushButton#add { background:#F0F0F0; border-radius:8px; }
         QListWidget { border:none; background:#FFFFFF; }
@@ -330,7 +341,7 @@ class ScanPro(QMainWindow):
         self.add_overlay.setGeometry(0, 0, 1, 1)
         body.addWidget(center, 1)
 
-        # Right: only the requested five controls.
+        # Right: control tools
         right = QFrame()
         right.setObjectName("right")
         right.setFixedWidth(270)
@@ -367,12 +378,12 @@ class ScanPro(QMainWindow):
         main.addLayout(body, 1)
 
         bottom = QFrame()
-        bottom.setFixedHeight(70)
+        bottom.setFixedHeight(75)
         bottom.setStyleSheet("border-top:1px solid #E5E6E8; background:#FFFFFF;")
         bl = QHBoxLayout(bottom)
-        bl.setContentsMargins(25, 10, 18, 10)
-        bl.addStretch()
-        self.save_btn = QPushButton("Save")
+        bl.setContentsMargins(25, 10, 25, 10)
+        bl.addStretch(1)
+        self.save_btn = QPushButton("SAVE")
         self.save_btn.setObjectName("save")
         self.save_btn.clicked.connect(self.save_image)
         bl.addWidget(self.save_btn)
@@ -516,7 +527,6 @@ class ScanPro(QMainWindow):
         if not ok:
             QMessageBox.critical(self, "Save", "Could not save the image.")
             return
-        QMessageBox.information(self, "Save", "Image saved successfully.")
 
 
 def main():
