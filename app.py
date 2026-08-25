@@ -201,28 +201,34 @@ def make_icon(kind, color="#111111", size=46):
 
 
 class InteractivePreview(QLabel):
-    """Preview widget with interactive 4 corner handles for modifying crop area."""
+    """Preview widget with interactive 4 corner handles."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet("background:#FFFFFF; color:#222; border-radius:4px;")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.image = None
+        self.base_image = None
         self.corners = None
         self.active_handle = -1
-        self.show_handles = False
         self.corner_changed_callback = None
 
-    def set_data(self, image, corners=None, show_handles=False):
+    def set_data(self, image, corners=None, base_image=None):
         self.image = image
-        self.corners = corners.copy() if corners is not None else None
-        self.show_handles = show_handles
+        if base_image is not None:
+            self.base_image = base_image
+        elif self.base_image is None:
+            self.base_image = image
+
+        if corners is not None:
+            self.corners = corners.copy()
         self.update()
 
     def get_image_rect(self):
-        if self.image is None:
+        img_to_check = self.base_image if self.base_image is not None else self.image
+        if img_to_check is None:
             return None
-        h, w = self.image.shape[:2]
+        h, w = img_to_check.shape[:2]
         pw, ph = self.width(), self.height()
         scale = min(pw / w, ph / h)
         nw, nh = int(w * scale), int(h * scale)
@@ -240,16 +246,23 @@ class InteractivePreview(QLabel):
             return
         ox, oy, nw, nh, scale = rect_info
 
-        # Render current image
         rgb = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, rgb.shape[1], rgb.shape[0], rgb.strides[0], QImage.Format_RGB888)
-        pix = QPixmap.fromImage(qimg).scaled(nw, nh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        
+        # Calculate scaled dimensions for current displayed image
+        ih, iw = self.image.shape[:2]
+        iscale = min(self.width() / iw, self.height() / ih)
+        inw, inh = int(iw * iscale), int(ih * iscale)
+        iox = (self.width() - inw) // 2
+        ioy = (self.height() - inh) // 2
+
+        pix = QPixmap.fromImage(qimg).scaled(inw, inh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
         painter = QPainter(self)
-        painter.drawPixmap(ox, oy, pix)
+        painter.drawPixmap(iox, ioy, pix)
 
-        # Draw 4 corner handles if original view is active
-        if self.show_handles and self.corners is not None:
+        # Always draw interactive 4 corner handles over the view
+        if self.corners is not None:
             pts_disp = []
             for pt in self.corners:
                 x = ox + pt[0] * scale
@@ -269,7 +282,7 @@ class InteractivePreview(QLabel):
         painter.end()
 
     def mousePressEvent(self, event):
-        if not self.show_handles or self.corners is None:
+        if self.corners is None:
             return
         rect_info = self.get_image_rect()
         if not rect_info:
@@ -280,20 +293,21 @@ class InteractivePreview(QLabel):
         for i, pt in enumerate(self.corners):
             cx = ox + pt[0] * scale
             cy = oy + pt[1] * scale
-            if (pos.x() - cx) ** 2 + (pos.y() - cy) ** 2 <= 225:  # 15px radius
+            if (pos.x() - cx) ** 2 + (pos.y() - cy) ** 2 <= 400:  # 20px hit radius
                 self.active_handle = i
                 break
 
     def mouseMoveEvent(self, event):
-        if self.active_handle != -1 and self.corners is not None:
+        if self.active_handle != -1 and self.corners is not None and self.base_image is not None:
             rect_info = self.get_image_rect()
             if not rect_info:
                 return
-            ox, oy, nw, nh, scale = rect_info
+            ox, oy, _, _, scale = rect_info
             pos = event.position()
 
-            x = max(0, min((pos.x() - ox) / scale, self.image.shape[1]))
-            y = max(0, min((pos.y() - oy) / scale, self.image.shape[0]))
+            h, w = self.base_image.shape[:2]
+            x = max(0, min((pos.x() - ox) / scale, w))
+            y = max(0, min((pos.y() - oy) / scale, h))
 
             self.corners[self.active_handle] = [x, y]
             self.update()
@@ -368,7 +382,7 @@ class ScanPro(QMainWindow):
         ll.addWidget(self.pages)
         body.addWidget(left)
 
-        # Center preview and add (+) overlay
+        # Center preview
         center = QFrame()
         center.setObjectName("center")
         cl = QVBoxLayout(center)
@@ -393,7 +407,7 @@ class ScanPro(QMainWindow):
         self.add_overlay.raise_()
         body.addWidget(center, 1)
 
-        # Right tools menu
+        # Right toolbar
         right = QFrame()
         right.setObjectName("right")
         right.setFixedWidth(270)
@@ -401,7 +415,6 @@ class ScanPro(QMainWindow):
         rv.setContentsMargins(28, 40, 28, 20)
         rv.setSpacing(25)
 
-        # Single rotate button
         self.rotate_btn = QPushButton()
         self.rotate_btn.setObjectName("rotate")
         self.rotate_btn.setFixedSize(85, 85)
@@ -527,7 +540,7 @@ class ScanPro(QMainWindow):
     def restore_original(self):
         if self.original is None:
             return
-        self.preview.set_data(self.original, self.corners, show_handles=True)
+        self.preview.set_data(self.original, self.corners, base_image=self.original)
         self.original_btn.button.setProperty("selected", True)
         self.magic_btn.button.setProperty("selected", False)
         self.update_button_styles()
@@ -540,7 +553,7 @@ class ScanPro(QMainWindow):
             QApplication.setOverrideCursor(Qt.WaitCursor)
             QApplication.processEvents()
             self.magic = magic_pro_ai(self.original, self.corners)
-            self.preview.set_data(self.magic, show_handles=False)
+            self.preview.set_data(self.magic, self.corners, base_image=self.original)
             self.magic_btn.button.setProperty("selected", True)
             self.original_btn.button.setProperty("selected", False)
             self.update_button_styles()
@@ -559,14 +572,17 @@ class ScanPro(QMainWindow):
             return
         self.original = cv2.rotate(self.original, cv2.ROTATE_90_CLOCKWISE)
         self.corners = detect_document_corners(self.original)
-        self.run_magic()
+        if self.magic_btn.button.property("selected"):
+            self.run_magic()
+        else:
+            self.restore_original()
 
     def delete_image(self):
         self.original = None
         self.magic = None
         self.corners = None
         self.pages.clear()
-        self.preview.set_data(None)
+        self.preview.set_data(None, None, None)
         self.update_overlay()
 
     def save_image(self):
