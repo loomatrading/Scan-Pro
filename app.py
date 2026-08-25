@@ -6,8 +6,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QImage, QPixmap, QPainter, QIcon
+from PySide6.QtCore import Qt, QSize, QPointF
+from PySide6.QtGui import QImage, QPixmap, QPainter, QIcon, QPen, QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QFileDialog, QMessageBox, QVBoxLayout, QHBoxLayout, QFrame,
@@ -40,7 +40,6 @@ def order_points(points):
 
 
 def detect_document_corners(image):
-    """Fast document detection. Works on a downscaled copy, then maps points back."""
     h, w = image.shape[:2]
     scale = min(1.0, 1400.0 / max(h, w))
     small = cv2.resize(image, None, fx=scale, fy=scale,
@@ -51,7 +50,6 @@ def detect_document_corners(image):
     image_area = small.shape[0] * small.shape[1]
     candidates = []
 
-    # Edges are reliable for paper documents.
     edges = cv2.Canny(gray, 35, 130)
     edges = cv2.morphologyEx(
         edges, cv2.MORPH_CLOSE,
@@ -60,7 +58,6 @@ def detect_document_corners(image):
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     candidates.extend(contours)
 
-    # Bright page fallback.
     _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     th = cv2.morphologyEx(
         th, cv2.MORPH_CLOSE,
@@ -95,7 +92,6 @@ def detect_document_corners(image):
             best /= scale
         return order_points(best)
 
-    # No detected border: use a safe 4% margin instead of failing.
     mx, my = w * 0.04, h * 0.04
     return np.array([
         [mx, my], [w - mx, my],
@@ -122,46 +118,35 @@ def perspective_transform(image, corners):
 
 
 def document_ai_enhance(img):
-    """Clean scanner effect: illumination correction, shadow & wrinkle removal, pure white background and clean borders."""
     if img is None:
         return None
 
-    # 1. Convert to Grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # 2. Estimate and remove uneven illumination/wrinkles/shadows
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (51, 51))
     morph = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
     
-    # Division to normalize paper surface background
     norm = cv2.divide(gray, morph, scale=255.0)
     norm = np.uint8(norm)
 
-    # 3. Enhance Contrast (CLAHE) for text sharpness without artifacting background
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(norm)
 
-    # 4. Clean background completely to pure white (255)
     _, final_gray = cv2.threshold(enhanced, 215, 255, cv2.THRESH_TRUNC)
     final_gray = cv2.normalize(final_gray, None, 0, 255, norm_type=cv2.NORM_MINMAX)
 
-    # 5. Clean outer borders (Remove dark frame edges/artifacts around margins)
     h, w = final_gray.shape
     margin_x = max(1, int(w * 0.015))
     margin_y = max(1, int(h * 0.015))
     
-    # Set outer 1.5% margins to solid white
     final_gray[:margin_y, :] = 255
     final_gray[-margin_y:, :] = 255
     final_gray[:, :margin_x] = 255
     final_gray[:, -margin_x:] = 255
 
-    # Convert back to 3-channel BGR image
     return cv2.cvtColor(final_gray, cv2.COLOR_GRAY2BGR)
 
 
 def ai_super_resolution(img):
-    """Real neural EDSR x2 when the model is available; graceful fallback otherwise."""
     try:
         if not hasattr(cv2, "dnn_superres"):
             return None
@@ -174,7 +159,6 @@ def ai_super_resolution(img):
         sr = cv2.dnn_superres.DnnSuperResImpl_create()
         sr.readModel(str(EDSR_FILE))
         sr.setModel("edsr", 2)
-        # EDSR is expensive on very large images; process a reasonable working size.
         h, w = img.shape[:2]
         max_side = 2200
         if max(h, w) > max_side:
@@ -188,7 +172,6 @@ def ai_super_resolution(img):
 
 
 def magic_pro_ai(image, corners):
-    """One-click scanner pipeline: perspective correction + real AI super-resolution + scanner enhancement."""
     scanned = perspective_transform(image, corners)
     ai = ai_super_resolution(scanned)
     if ai is not None:
@@ -196,24 +179,13 @@ def magic_pro_ai(image, corners):
     return document_ai_enhance(scanned)
 
 
-def cv_to_pixmap(image, max_w=900, max_h=700):
-    if image is None:
-        return QPixmap()
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    h, w = rgb.shape[:2]
-    qimg = QImage(rgb.data, w, h, rgb.strides[0], QImage.Format_RGB888).copy()
-    pix = QPixmap.fromImage(qimg)
-    return pix.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-
 def svg_icon(kind, color="#111111"):
     icons = {
-        "left": f'<path d="M35 10L17 24l18 14" fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 24h23" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
-        "right": f'<path d="M13 10l18 14-18 14" fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 24H7" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
+        "rotate_single": f'<path d="M24 8C15.16 8 8 15.16 8 24s7.16 16 16 16c7.05 0 13-4.56 15.1-10.8" fill="none" stroke="{color}" stroke-width="4" stroke-linecap="round"/><path d="M39 12v12H27" fill="none" stroke="{color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>',
         "original": f'<rect x="10" y="6" width="28" height="36" rx="3" fill="{color}" opacity=".12"/><rect x="10" y="6" width="28" height="36" rx="3" fill="none" stroke="{color}" stroke-width="2.5"/><path d="M16 16h16M16 23h16M16 30h12M16 37h8" stroke="{color}" stroke-width="2.5"/>',
         "ai": '<text x="4" y="36" font-family="Arial" font-size="30" font-weight="700" fill="#00B89C">AI</text><path d="M39 7l2 6 6 2-6 2-2 6-2-6-6-2 6-2z" fill="#18C9A7"/>',
         "plus": '<path d="M24 10v28M10 24h28" stroke="#999999" stroke-width="4" stroke-linecap="round"/>',
-        "save": '<path d="M9 7h24l6 6v28H9z" fill="#10B99A" opacity=".16"/><path d="M9 7h24l6 6v28H9zM16 7v11h14V7M17 31h14" fill="none" stroke="#10B99A" stroke-width="2.5"/>',
+        "trash": f'<path d="M12 14h24M18 14V10h12v4M15 14v22a2 2 0 002 2h14a2 2 0 002-2V14" fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 20v10M28 20v10" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
     }
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">{icons[kind]}</svg>'
 
@@ -228,30 +200,109 @@ def make_icon(kind, color="#111111", size=46):
     return QIcon(pix)
 
 
-class Preview(QLabel):
-    def __init__(self):
-        super().__init__()
+class InteractivePreview(QLabel):
+    """Preview widget with interactive 4 corner handles for modifying crop area."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet("background:#FFFFFF; color:#222; border-radius:4px;")
-        self.setText("Import Images")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.image = None
+        self.corners = None
+        self.active_handle = -1
+        self.show_handles = False
+        self.corner_changed_callback = None
 
-    def show_image(self, image):
-        if image is None:
-            self.setText("Import Images")
-            self.setPixmap(QPixmap())
-            return
-        self.setText("")
-        self.setPixmap(cv_to_pixmap(image, max(300, self.width() - 30), max(300, self.height() - 30)))
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "image") and self.image is not None:
-            self.show_image(self.image)
-
-    def set_image(self, image):
+    def set_data(self, image, corners=None, show_handles=False):
         self.image = image
-        self.show_image(image)
+        self.corners = corners.copy() if corners is not None else None
+        self.show_handles = show_handles
+        self.update()
+
+    def get_image_rect(self):
+        if self.image is None:
+            return None
+        h, w = self.image.shape[:2]
+        pw, ph = self.width(), self.height()
+        scale = min(pw / w, ph / h)
+        nw, nh = int(w * scale), int(h * scale)
+        ox = (pw - nw) // 2
+        oy = (ph - nh) // 2
+        return ox, oy, nw, nh, scale
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.image is None:
+            return
+
+        rect_info = self.get_image_rect()
+        if not rect_info:
+            return
+        ox, oy, nw, nh, scale = rect_info
+
+        # Render current image
+        rgb = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
+        qimg = QImage(rgb.data, rgb.shape[1], rgb.shape[0], rgb.strides[0], QImage.Format_RGB888)
+        pix = QPixmap.fromImage(qimg).scaled(nw, nh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        painter = QPainter(self)
+        painter.drawPixmap(ox, oy, pix)
+
+        # Draw 4 corner handles if original view is active
+        if self.show_handles and self.corners is not None:
+            pts_disp = []
+            for pt in self.corners:
+                x = ox + pt[0] * scale
+                y = oy + pt[1] * scale
+                pts_disp.append(QPointF(x, y))
+
+            pen = QPen(QColor("#10B99A"), 2, Qt.DashLine)
+            painter.setPen(pen)
+            for i in range(4):
+                painter.drawLine(pts_disp[i], pts_disp[(i + 1) % 4])
+
+            painter.setPen(QPen(QColor("#FFFFFF"), 2))
+            painter.setBrush(QBrush(QColor("#10B99A")))
+            for p in pts_disp:
+                painter.drawEllipse(p, 8, 8)
+
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if not self.show_handles or self.corners is None:
+            return
+        rect_info = self.get_image_rect()
+        if not rect_info:
+            return
+        ox, oy, _, _, scale = rect_info
+
+        pos = event.position()
+        for i, pt in enumerate(self.corners):
+            cx = ox + pt[0] * scale
+            cy = oy + pt[1] * scale
+            if (pos.x() - cx) ** 2 + (pos.y() - cy) ** 2 <= 225:  # 15px radius
+                self.active_handle = i
+                break
+
+    def mouseMoveEvent(self, event):
+        if self.active_handle != -1 and self.corners is not None:
+            rect_info = self.get_image_rect()
+            if not rect_info:
+                return
+            ox, oy, nw, nh, scale = rect_info
+            pos = event.position()
+
+            x = max(0, min((pos.x() - ox) / scale, self.image.shape[1]))
+            y = max(0, min((pos.y() - oy) / scale, self.image.shape[0]))
+
+            self.corners[self.active_handle] = [x, y]
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if self.active_handle != -1:
+            self.active_handle = -1
+            if self.corner_changed_callback:
+                self.corner_changed_callback(self.corners)
 
 
 class ScanPro(QMainWindow):
@@ -274,14 +325,18 @@ class ScanPro(QMainWindow):
         #right { border-left:1px solid #E4E5E7; background:#FFFFFF; }
         #topline { border-bottom:1px solid #E5E6E8; }
         QPushButton { border:none; }
-        QPushButton#rotate { background:#F5F5F5; border-radius:8px; }
+        QPushButton#rotate { background:#1677FF; border-radius:10px; min-width:80px; min-height:80px; }
+        QPushButton#rotate:hover { background:#0D5BCC; }
         QPushButton#tool { background:#F0F0F0; border-radius:9px; min-width:92px; min-height:80px; }
         QPushButton#tool:hover { background:#E8E8E8; }
         QPushButton#tool[selected='true'] { background:#D9F7F1; border:1px solid #10B99A; }
+        QPushButton#delete { background:#F0F0F0; border-radius:9px; min-width:92px; min-height:80px; }
+        QPushButton#delete:hover { background:#FFE6E6; }
         QLabel#toolText { font-size:14px; }
         QPushButton#save { background:#10B99A; color:white; border-radius:8px; font-size:18px; font-weight:bold; min-width:160px; min-height:45px; padding:0 20px; }
         QPushButton#save:hover { background:#0DAE91; }
-        QPushButton#add { background:#F0F0F0; border-radius:8px; }
+        QPushButton#add { background:#F0F0F0; border-radius:12px; }
+        QPushButton#add:hover { background:#E2E2E2; }
         QListWidget { border:none; background:#FFFFFF; }
         QListWidget::item:selected { background:#D9F7F1; border-radius:8px; }
         """)
@@ -301,7 +356,7 @@ class ScanPro(QMainWindow):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        # Left: pages only, no filters or extra controls.
+        # Left list
         left = QFrame()
         left.setObjectName("left")
         left.setFixedWidth(145)
@@ -313,53 +368,47 @@ class ScanPro(QMainWindow):
         ll.addWidget(self.pages)
         body.addWidget(left)
 
-        # Center: image or the large + button.
+        # Center preview and add (+) overlay
         center = QFrame()
         center.setObjectName("center")
         cl = QVBoxLayout(center)
         cl.setContentsMargins(24, 24, 24, 24)
 
-        self.preview = Preview()
+        self.preview = InteractivePreview()
+        self.preview.corner_changed_callback = self.on_corners_updated
         cl.addWidget(self.preview, 1)
 
         self.add_button = QPushButton()
         self.add_button.setObjectName("add")
         self.add_button.setIcon(make_icon("plus", size=64))
         self.add_button.setIconSize(QSize(64, 64))
-        self.add_button.setFixedSize(125, 125)
+        self.add_button.setFixedSize(120, 120)
         self.add_button.clicked.connect(self.open_image)
-        # Put + exactly in the center over the empty preview.
+
         self.add_overlay = QFrame(self.preview)
-        self.add_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         ol = QVBoxLayout(self.add_overlay)
         ol.setContentsMargins(0, 0, 0, 0)
-        ol.addWidget(QLabel("Import Images"), 0, Qt.AlignCenter)
         ol.addWidget(self.add_button, 0, Qt.AlignCenter)
         self.add_overlay.setStyleSheet("background:transparent;")
-        self.add_overlay.mousePressEvent = lambda e: self.open_image()
         self.add_overlay.raise_()
-        self.add_overlay.setGeometry(0, 0, 1, 1)
         body.addWidget(center, 1)
 
-        # Right: control tools
+        # Right tools menu
         right = QFrame()
         right.setObjectName("right")
         right.setFixedWidth(270)
         rv = QVBoxLayout(right)
-        rv.setContentsMargins(28, 55, 28, 20)
-        rv.setSpacing(20)
+        rv.setContentsMargins(28, 40, 28, 20)
+        rv.setSpacing(25)
 
-        rotations = QHBoxLayout()
-        rotations.setSpacing(18)
-        for kind, slot in (("left", lambda: self.rotate(-1)), ("right", lambda: self.rotate(1))):
-            b = QPushButton()
-            b.setObjectName("rotate")
-            b.setFixedSize(70, 65)
-            b.setIcon(make_icon(kind, size=40))
-            b.setIconSize(QSize(40, 40))
-            b.clicked.connect(slot)
-            rotations.addWidget(b)
-        rv.addLayout(rotations)
+        # Single rotate button
+        self.rotate_btn = QPushButton()
+        self.rotate_btn.setObjectName("rotate")
+        self.rotate_btn.setFixedSize(85, 85)
+        self.rotate_btn.setIcon(make_icon("rotate_single", color="#FFFFFF", size=50))
+        self.rotate_btn.setIconSize(QSize(50, 50))
+        self.rotate_btn.clicked.connect(lambda: self.rotate(1))
+        rv.addWidget(self.rotate_btn, 0, Qt.AlignHCenter)
 
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
@@ -368,10 +417,14 @@ class ScanPro(QMainWindow):
 
         self.original_btn = self.tool_button("original", "Original", "#1677FF", self.restore_original)
         self.magic_btn = self.tool_button("ai", "Magic Pro AI", "#00B89C", self.run_magic)
-        self.original_btn.setProperty("selected", False)
-        self.magic_btn.setProperty("selected", True)
+        self.delete_btn = self.tool_button("trash", "", "#D32F2F", self.delete_image, is_delete=True)
+
+        self.original_btn.button.setProperty("selected", False)
+        self.magic_btn.button.setProperty("selected", True)
+
         rv.addWidget(self.original_btn, 0, Qt.AlignHCenter)
         rv.addWidget(self.magic_btn, 0, Qt.AlignHCenter)
+        rv.addWidget(self.delete_btn, 0, Qt.AlignHCenter)
         rv.addStretch(1)
 
         body.addWidget(right)
@@ -391,36 +444,34 @@ class ScanPro(QMainWindow):
 
         self.update_overlay()
 
-    def tool_button(self, kind, text, color, slot):
+    def tool_button(self, kind, text, color, slot, is_delete=False):
         box = QWidget()
         lay = QVBoxLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(5)
         b = QPushButton()
-        b.setObjectName("tool")
+        b.setObjectName("delete" if is_delete else "tool")
         b.setIcon(make_icon(kind, color, 52))
         b.setIconSize(QSize(52, 52))
         b.clicked.connect(slot)
         lay.addWidget(b)
-        label = QLabel(text)
-        label.setObjectName("toolText")
-        label.setAlignment(Qt.AlignCenter)
-        lay.addWidget(label)
+        if text:
+            label = QLabel(text)
+            label.setObjectName("toolText")
+            label.setAlignment(Qt.AlignCenter)
+            lay.addWidget(label)
         box.button = b
         return box
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_overlay()
-        if self.original is not None:
-            self.preview.show_image(self.magic if self.magic is not None else self.original)
 
     def update_overlay(self):
         if not hasattr(self, "add_overlay"):
             return
         if self.original is None:
-            w = min(260, max(200, self.preview.width() // 2))
-            h = 230
+            w, h = 130, 130
             x = max(0, (self.preview.width() - w) // 2)
             y = max(0, (self.preview.height() - h) // 2)
             self.add_overlay.setGeometry(x, y, w, h)
@@ -446,18 +497,27 @@ class ScanPro(QMainWindow):
         self.corners = detect_document_corners(image)
         self.magic = None
 
-        # Show page thumbnail.
-        pix = cv_to_pixmap(image, 105, 135)
+        h, w = image.shape[:2]
+        scale = min(105 / w, 135 / h)
+        pw, ph = int(w * scale), int(h * scale)
+        small = cv2.resize(image, (pw, ph), interpolation=cv2.INTER_AREA)
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        qimg = QImage(rgb.data, pw, ph, rgb.strides[0], QImage.Format_RGB888)
+
         item = QListWidgetItem()
-        item.setIcon(QIcon(pix))
+        item.setIcon(QIcon(QPixmap.fromImage(qimg)))
         item.setSizeHint(QSize(115, 150))
         self.pages.clear()
         self.pages.addItem(item)
         self.pages.setCurrentRow(0)
 
-        # Immediately apply Magic Pro AI as requested.
         self.run_magic()
         self.update_overlay()
+
+    def on_corners_updated(self, updated_corners):
+        self.corners = updated_corners
+        if self.magic_btn.button.property("selected"):
+            self.run_magic()
 
     def select_page(self, row):
         if row < 0 or self.original is None:
@@ -467,14 +527,10 @@ class ScanPro(QMainWindow):
     def restore_original(self):
         if self.original is None:
             return
-        self.magic = None
-        self.preview.set_image(self.original)
+        self.preview.set_data(self.original, self.corners, show_handles=True)
         self.original_btn.button.setProperty("selected", True)
         self.magic_btn.button.setProperty("selected", False)
-        self.original_btn.button.style().unpolish(self.original_btn.button)
-        self.original_btn.button.style().polish(self.original_btn.button)
-        self.magic_btn.button.style().unpolish(self.magic_btn.button)
-        self.magic_btn.button.style().polish(self.magic_btn.button)
+        self.update_button_styles()
 
     def run_magic(self):
         if self.original is None:
@@ -484,30 +540,34 @@ class ScanPro(QMainWindow):
             QApplication.setOverrideCursor(Qt.WaitCursor)
             QApplication.processEvents()
             self.magic = magic_pro_ai(self.original, self.corners)
-            self.preview.set_image(self.magic)
+            self.preview.set_data(self.magic, show_handles=False)
             self.magic_btn.button.setProperty("selected", True)
             self.original_btn.button.setProperty("selected", False)
-            self.magic_btn.button.style().unpolish(self.magic_btn.button)
-            self.magic_btn.button.style().polish(self.magic_btn.button)
-            self.original_btn.button.style().unpolish(self.original_btn.button)
-            self.original_btn.button.style().polish(self.original_btn.button)
+            self.update_button_styles()
         except Exception as exc:
             QMessageBox.warning(self, "Magic Pro AI", f"AI processing failed:\n{exc}")
         finally:
             QApplication.restoreOverrideCursor()
 
+    def update_button_styles(self):
+        for btn in (self.original_btn.button, self.magic_btn.button):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
     def rotate(self, direction):
         if self.original is None:
             return
-        if direction > 0:
-            self.original = cv2.rotate(self.original, cv2.ROTATE_90_CLOCKWISE)
-        else:
-            self.original = cv2.rotate(self.original, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        self.original = cv2.rotate(self.original, cv2.ROTATE_90_CLOCKWISE)
         self.corners = detect_document_corners(self.original)
-        self.magic = None
-        self.preview.set_image(self.original)
-        self.update_overlay()
         self.run_magic()
+
+    def delete_image(self):
+        self.original = None
+        self.magic = None
+        self.corners = None
+        self.pages.clear()
+        self.preview.set_data(None)
+        self.update_overlay()
 
     def save_image(self):
         if self.original is None:
@@ -526,7 +586,6 @@ class ScanPro(QMainWindow):
         ok = cv2.imwrite(fn, image, [cv2.IMWRITE_JPEG_QUALITY, 98] if fn.lower().endswith((".jpg", ".jpeg")) else [cv2.IMWRITE_PNG_COMPRESSION, 1])
         if not ok:
             QMessageBox.critical(self, "Save", "Could not save the image.")
-            return
 
 
 def main():
