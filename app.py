@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 from PySide6.QtCore import Qt, QSize, QPointF
-from PySide6.QtGui import QImage, QPixmap, QPainter, QIcon, QPen, QBrush, QColor
+from PySide6.QtGui import QImage, QPixmap, QPainter, QIcon, QPen, QBrush, QColor, QCursor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QFileDialog, QMessageBox, QVBoxLayout, QHBoxLayout, QFrame,
@@ -186,6 +186,7 @@ def svg_icon(kind, color="#111111"):
         "ai": '<text x="4" y="36" font-family="Arial" font-size="30" font-weight="700" fill="#00B89C">AI</text><path d="M39 7l2 6 6 2-6 2-2 6-2-6-6-2 6-2z" fill="#18C9A7"/>',
         "plus": '<path d="M24 10v28M10 24h28" stroke="#999999" stroke-width="4" stroke-linecap="round"/>',
         "trash": f'<path d="M12 14h24M18 14V10h12v4M15 14v22a2 2 0 002 2h14a2 2 0 002-2V14" fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 20v10M28 20v10" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
+        "cleaner": f'<path d="M14 36l12-24 6 3-12 24z" fill="{color}"/><path d="M10 38c0 4 8 6 14 6s14-2 14-6c0-3-4-5-10-5H16c-6 0-10 2-10 5z" fill="{color}" opacity="0.8"/><path d="M36 12l4-4M32 8l2-4M40 18l4-2" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
     }
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">{icons[kind]}</svg>'
 
@@ -201,7 +202,7 @@ def make_icon(kind, color="#111111", size=46):
 
 
 class InteractivePreview(QLabel):
-    """Preview widget with interactive 4 corner handles."""
+    """Interactive preview canvas with corner/edge handle control & eraser brush."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
@@ -211,7 +212,11 @@ class InteractivePreview(QLabel):
         self.base_image = None
         self.corners = None
         self.active_handle = -1
+        self.eraser_active = False
+        self.brush_size = 20
         self.corner_changed_callback = None
+        self.image_edited_callback = None
+        self.setMouseTracking(True)
 
     def set_data(self, image, corners=None, base_image=None):
         self.image = image
@@ -224,11 +229,17 @@ class InteractivePreview(QLabel):
             self.corners = corners.copy()
         self.update()
 
-    def get_image_rect(self):
-        img_to_check = self.base_image if self.base_image is not None else self.image
-        if img_to_check is None:
+    def set_eraser_mode(self, active):
+        self.eraser_active = active
+        if active:
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+
+    def get_disp_rect(self):
+        if self.image is None:
             return None
-        h, w = img_to_check.shape[:2]
+        h, w = self.image.shape[:2]
         pw, ph = self.width(), self.height()
         scale = min(pw / w, ph / h)
         nw, nh = int(w * scale), int(h * scale)
@@ -236,80 +247,140 @@ class InteractivePreview(QLabel):
         oy = (ph - nh) // 2
         return ox, oy, nw, nh, scale
 
+    def get_all_handles(self):
+        if self.corners is None:
+            return []
+        pts = list(self.corners)
+        # 4 Corners: 0..3
+        # 4 Edges: 4..7 (Midpoints of segments)
+        edges = []
+        for i in range(4):
+            p1 = pts[i]
+            p2 = pts[(i + 1) % 4]
+            edges.append([(p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0])
+        return pts + edges
+
     def paintEvent(self, event):
         super().paintEvent(event)
         if self.image is None:
             return
 
-        rect_info = self.get_image_rect()
+        rect_info = self.get_disp_rect()
         if not rect_info:
             return
         ox, oy, nw, nh, scale = rect_info
 
         rgb = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, rgb.shape[1], rgb.shape[0], rgb.strides[0], QImage.Format_RGB888)
-        
-        # Calculate scaled dimensions for current displayed image
-        ih, iw = self.image.shape[:2]
-        iscale = min(self.width() / iw, self.height() / ih)
-        inw, inh = int(iw * iscale), int(ih * iscale)
-        iox = (self.width() - inw) // 2
-        ioy = (self.height() - inh) // 2
-
-        pix = QPixmap.fromImage(qimg).scaled(inw, inh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pix = QPixmap.fromImage(qimg).scaled(nw, nh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
         painter = QPainter(self)
-        painter.drawPixmap(iox, ioy, pix)
+        painter.drawPixmap(ox, oy, pix)
 
-        # Always draw interactive 4 corner handles over the view
-        if self.corners is not None:
-            pts_disp = []
-            for pt in self.corners:
-                x = ox + pt[0] * scale
-                y = oy + pt[1] * scale
-                pts_disp.append(QPointF(x, y))
+        # Draw 4 corner handles and 4 edge handles if base image is loaded
+        if self.base_image is not None and self.corners is not None and not self.eraser_active:
+            bh, bw = self.base_image.shape[:2]
+            b_scale = min(self.width() / bw, self.height() / bh)
+            box_x = (self.width() - int(bw * b_scale)) // 2
+            box_y = (self.height() - int(bh * b_scale)) // 2
 
+            handles = self.get_all_handles()
+            disp_pts = []
+            for h_pt in handles:
+                x = box_x + h_pt[0] * b_scale
+                y = box_y + h_pt[1] * b_scale
+                disp_pts.append(QPointF(x, y))
+
+            # Draw polygon edges
             pen = QPen(QColor("#10B99A"), 2, Qt.DashLine)
             painter.setPen(pen)
             for i in range(4):
-                painter.drawLine(pts_disp[i], pts_disp[(i + 1) % 4])
+                painter.drawLine(disp_pts[i], disp_pts[(i + 1) % 4])
 
+            # Draw Corner handles (0..3)
             painter.setPen(QPen(QColor("#FFFFFF"), 2))
             painter.setBrush(QBrush(QColor("#10B99A")))
-            for p in pts_disp:
-                painter.drawEllipse(p, 8, 8)
+            for p in disp_pts[:4]:
+                painter.drawEllipse(p, 7, 7)
+
+            # Draw Edge handles (4..7)
+            painter.setBrush(QBrush(QColor("#1677FF")))
+            for p in disp_pts[4:]:
+                painter.drawRect(p.x() - 5, p.y() - 5, 10, 10)
 
         painter.end()
 
-    def mousePressEvent(self, event):
-        if self.corners is None:
+    def erase_at(self, pos):
+        if self.image is None or not self.eraser_active:
             return
-        rect_info = self.get_image_rect()
+        rect_info = self.get_disp_rect()
         if not rect_info:
             return
         ox, oy, _, _, scale = rect_info
 
+        img_x = int((pos.x() - ox) / scale)
+        img_y = int((pos.y() - oy) / scale)
+
+        h, w = self.image.shape[:2]
+        if 0 <= img_x < w and 0 <= img_y < h:
+            cv2.circle(self.image, (img_x, img_y), self.brush_size, (255, 255, 255), -1)
+            self.update()
+            if self.image_edited_callback:
+                self.image_edited_callback(self.image)
+
+    def mousePressEvent(self, event):
         pos = event.position()
-        for i, pt in enumerate(self.corners):
-            cx = ox + pt[0] * scale
-            cy = oy + pt[1] * scale
+        if self.eraser_active:
+            self.erase_at(pos)
+            return
+
+        if self.base_image is None or self.corners is None:
+            return
+
+        bh, bw = self.base_image.shape[:2]
+        b_scale = min(self.width() / bw, self.height() / bh)
+        box_x = (self.width() - int(bw * b_scale)) // 2
+        box_y = (self.height() - int(bh * b_scale)) // 2
+
+        handles = self.get_all_handles()
+        for i, h_pt in enumerate(handles):
+            cx = box_x + h_pt[0] * b_scale
+            cy = box_y + h_pt[1] * b_scale
             if (pos.x() - cx) ** 2 + (pos.y() - cy) ** 2 <= 400:  # 20px hit radius
                 self.active_handle = i
                 break
 
     def mouseMoveEvent(self, event):
+        pos = event.position()
+        if self.eraser_active and (event.buttons() & Qt.LeftButton):
+            self.erase_at(pos)
+            return
+
         if self.active_handle != -1 and self.corners is not None and self.base_image is not None:
-            rect_info = self.get_image_rect()
-            if not rect_info:
-                return
-            ox, oy, _, _, scale = rect_info
-            pos = event.position()
+            bh, bw = self.base_image.shape[:2]
+            b_scale = min(self.width() / bw, self.height() / bh)
+            box_x = (self.width() - int(bw * b_scale)) // 2
+            box_y = (self.height() - int(bh * b_scale)) // 2
 
-            h, w = self.base_image.shape[:2]
-            x = max(0, min((pos.x() - ox) / scale, w))
-            y = max(0, min((pos.y() - oy) / scale, h))
+            x = max(0, min((pos.x() - box_x) / b_scale, bw))
+            y = max(0, min((pos.y() - box_y) / b_scale, bh))
 
-            self.corners[self.active_handle] = [x, y]
+            if self.active_handle < 4:
+                # Direct Corner Drag
+                self.corners[self.active_handle] = [x, y]
+            else:
+                # Edge Drag: Move both adjacent corners together
+                edge_idx = self.active_handle - 4
+                c1 = edge_idx
+                c2 = (edge_idx + 1) % 4
+                old_mid_x = (self.corners[c1][0] + self.corners[c2][0]) / 2.0
+                old_mid_y = (self.corners[c1][1] + self.corners[c2][1]) / 2.0
+                dx = x - old_mid_x
+                dy = y - old_mid_y
+
+                self.corners[c1] = [max(0, min(self.corners[c1][0] + dx, bw)), max(0, min(self.corners[c1][1] + dy, bh))]
+                self.corners[c2] = [max(0, min(self.corners[c2][0] + dx, bw)), max(0, min(self.corners[c2][1] + dy, bh))]
+
             self.update()
 
     def mouseReleaseEvent(self, event):
@@ -323,7 +394,6 @@ class ScanPro(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1450, 850)
         self.setMinimumSize(1000, 650)
 
         self.original = None
@@ -347,8 +417,8 @@ class ScanPro(QMainWindow):
         QPushButton#delete { background:#F0F0F0; border-radius:9px; min-width:92px; min-height:80px; }
         QPushButton#delete:hover { background:#FFE6E6; }
         QLabel#toolText { font-size:14px; }
-        QPushButton#save { background:#10B99A; color:white; border-radius:8px; font-size:18px; font-weight:bold; min-width:160px; min-height:45px; padding:0 20px; }
-        QPushButton#save:hover { background:#0DAE91; }
+        QPushButton#save { background:#00B89C; color:#FFFFFF; border-radius:8px; font-size:22px; font-weight:bold; min-width:180px; min-height:50px; padding:8px 24px; }
+        QPushButton#save:hover { background:#019D85; }
         QPushButton#add { background:#F0F0F0; border-radius:12px; }
         QPushButton#add:hover { background:#E2E2E2; }
         QListWidget { border:none; background:#FFFFFF; }
@@ -390,6 +460,7 @@ class ScanPro(QMainWindow):
 
         self.preview = InteractivePreview()
         self.preview.corner_changed_callback = self.on_corners_updated
+        self.preview.image_edited_callback = self.on_image_edited
         cl.addWidget(self.preview, 1)
 
         self.add_button = QPushButton()
@@ -412,8 +483,8 @@ class ScanPro(QMainWindow):
         right.setObjectName("right")
         right.setFixedWidth(270)
         rv = QVBoxLayout(right)
-        rv.setContentsMargins(28, 40, 28, 20)
-        rv.setSpacing(25)
+        rv.setContentsMargins(28, 30, 28, 20)
+        rv.setSpacing(18)
 
         self.rotate_btn = QPushButton()
         self.rotate_btn.setObjectName("rotate")
@@ -430,6 +501,7 @@ class ScanPro(QMainWindow):
 
         self.original_btn = self.tool_button("original", "Original", "#1677FF", self.restore_original)
         self.magic_btn = self.tool_button("ai", "Magic Pro AI", "#00B89C", self.run_magic)
+        self.cleaner_btn = self.tool_button("cleaner", "Cleaner", "#0088FF", self.toggle_cleaner)
         self.delete_btn = self.tool_button("trash", "", "#D32F2F", self.delete_image, is_delete=True)
 
         self.original_btn.button.setProperty("selected", False)
@@ -437,19 +509,21 @@ class ScanPro(QMainWindow):
 
         rv.addWidget(self.original_btn, 0, Qt.AlignHCenter)
         rv.addWidget(self.magic_btn, 0, Qt.AlignHCenter)
+        rv.addWidget(self.cleaner_btn, 0, Qt.AlignHCenter)
         rv.addWidget(self.delete_btn, 0, Qt.AlignHCenter)
         rv.addStretch(1)
 
         body.addWidget(right)
         main.addLayout(body, 1)
 
+        # Bottom Bar with visible Save Button
         bottom = QFrame()
         bottom.setFixedHeight(75)
         bottom.setStyleSheet("border-top:1px solid #E5E6E8; background:#FFFFFF;")
         bl = QHBoxLayout(bottom)
-        bl.setContentsMargins(25, 10, 25, 10)
+        bl.setContentsMargins(25, 10, 35, 10)
         bl.addStretch(1)
-        self.save_btn = QPushButton("SAVE")
+        self.save_btn = QPushButton("Save")
         self.save_btn.setObjectName("save")
         self.save_btn.clicked.connect(self.save_image)
         bl.addWidget(self.save_btn)
@@ -461,7 +535,7 @@ class ScanPro(QMainWindow):
         box = QWidget()
         lay = QVBoxLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(5)
+        lay.setSpacing(4)
         b = QPushButton()
         b.setObjectName("delete" if is_delete else "tool")
         b.setIcon(make_icon(kind, color, 52))
@@ -527,10 +601,22 @@ class ScanPro(QMainWindow):
         self.run_magic()
         self.update_overlay()
 
+    def toggle_cleaner(self):
+        if self.original is None:
+            return
+        is_active = not self.preview.eraser_active
+        self.preview.set_eraser_mode(is_active)
+        self.cleaner_btn.button.setProperty("selected", is_active)
+        self.update_button_styles()
+
     def on_corners_updated(self, updated_corners):
         self.corners = updated_corners
         if self.magic_btn.button.property("selected"):
             self.run_magic()
+
+    def on_image_edited(self, edited_img):
+        if self.magic_btn.button.property("selected"):
+            self.magic = edited_img.copy()
 
     def select_page(self, row):
         if row < 0 or self.original is None:
@@ -540,9 +626,11 @@ class ScanPro(QMainWindow):
     def restore_original(self):
         if self.original is None:
             return
+        self.preview.set_eraser_mode(False)
         self.preview.set_data(self.original, self.corners, base_image=self.original)
         self.original_btn.button.setProperty("selected", True)
         self.magic_btn.button.setProperty("selected", False)
+        self.cleaner_btn.button.setProperty("selected", False)
         self.update_button_styles()
 
     def run_magic(self):
@@ -553,9 +641,11 @@ class ScanPro(QMainWindow):
             QApplication.setOverrideCursor(Qt.WaitCursor)
             QApplication.processEvents()
             self.magic = magic_pro_ai(self.original, self.corners)
+            self.preview.set_eraser_mode(False)
             self.preview.set_data(self.magic, self.corners, base_image=self.original)
             self.magic_btn.button.setProperty("selected", True)
             self.original_btn.button.setProperty("selected", False)
+            self.cleaner_btn.button.setProperty("selected", False)
             self.update_button_styles()
         except Exception as exc:
             QMessageBox.warning(self, "Magic Pro AI", f"AI processing failed:\n{exc}")
@@ -563,7 +653,7 @@ class ScanPro(QMainWindow):
             QApplication.restoreOverrideCursor()
 
     def update_button_styles(self):
-        for btn in (self.original_btn.button, self.magic_btn.button):
+        for btn in (self.original_btn.button, self.magic_btn.button, self.cleaner_btn.button):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
@@ -582,6 +672,7 @@ class ScanPro(QMainWindow):
         self.magic = None
         self.corners = None
         self.pages.clear()
+        self.preview.set_eraser_mode(False)
         self.preview.set_data(None, None, None)
         self.update_overlay()
 
@@ -589,7 +680,7 @@ class ScanPro(QMainWindow):
         if self.original is None:
             QMessageBox.information(self, "Save", "Import an image first.")
             return
-        image = self.magic if self.magic is not None else self.original
+        image = self.preview.image if self.preview.image is not None else self.original
         default = os.path.join(desktop_path(), "ScanPro.jpg")
         fn, _ = QFileDialog.getSaveFileName(
             self, "Save Image", default,
@@ -608,7 +699,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     window = ScanPro()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())
 
 
