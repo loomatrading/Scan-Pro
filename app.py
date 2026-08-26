@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from PySide6.QtCore import Qt, QSize, QPointF
-from PySide6.QtGui import QImage, QPixmap, QPainter, QIcon, QPen, QBrush, QColor, QCursor
+from PySide6.QtGui import QImage, QPixmap, QPainter, QIcon, QPen, QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QFileDialog, QMessageBox, QVBoxLayout, QHBoxLayout, QFrame,
@@ -225,12 +225,29 @@ class InteractivePreview(QLabel):
         self.active_handle = -1
         self.eraser_active = False
         self.brush_size = 24
+        self.zoom_factor = 1.0  # معامِل التكبير والتصغير
+        self.history = []       # سجل التراجع Undo
         self.mouse_pos = QPointF(-100, -100)
         self.corner_changed_callback = None
         self.image_edited_callback = None
         self.setMouseTracking(True)
 
+    def save_undo_state(self):
+        if self.image is not None:
+            self.history.append(self.image.copy())
+            if len(self.history) > 15:
+                self.history.pop(0)
+
+    def undo(self):
+        if self.history:
+            self.image = self.history.pop()
+            self.update()
+            if self.image_edited_callback:
+                self.image_edited_callback(self.image)
+
     def set_data(self, image, corners=None, base_image=None):
+        if image is not None and self.image is not None:
+            self.save_undo_state()
         self.image = image
         if base_image is not None:
             self.base_image = base_image
@@ -254,11 +271,24 @@ class InteractivePreview(QLabel):
             return None
         h, w = self.image.shape[:2]
         pw, ph = self.width(), self.height()
-        scale = min(pw / w, ph / h)
+        scale = min(pw / w, ph / h) * self.zoom_factor
         nw, nh = int(w * scale), int(h * scale)
         ox = (pw - nw) // 2
         oy = (ph - nh) // 2
         return ox, oy, nw, nh, scale
+
+    def wheelEvent(self, event):
+        # التكبير والتصغير باستخدام Ctrl + عجلة الفأرة
+        if event.modifiers() & Qt.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.zoom_factor = min(self.zoom_factor * 1.15, 5.0)
+            else:
+                self.zoom_factor = max(self.zoom_factor / 1.15, 0.5)
+            self.update()
+            event.accept()
+        else:
+            super().wheelEvent(event)
 
     def get_all_handles(self):
         if self.corners is None:
@@ -290,7 +320,7 @@ class InteractivePreview(QLabel):
 
         if self.base_image is not None and self.corners is not None and not self.eraser_active:
             bh, bw = self.base_image.shape[:2]
-            b_scale = min(self.width() / bw, self.height() / bh)
+            b_scale = min(self.width() / bw, self.height() / bh) * self.zoom_factor
             box_x = (self.width() - int(bw * b_scale)) // 2
             box_y = (self.height() - int(bh * b_scale)) // 2
 
@@ -343,6 +373,7 @@ class InteractivePreview(QLabel):
 
         h, w = self.image.shape[:2]
         if 0 <= img_x < w and 0 <= img_y < h:
+            self.save_undo_state()
             cv2.rectangle(
                 self.image,
                 (img_x - self.brush_size, img_y - self.brush_size),
@@ -363,7 +394,7 @@ class InteractivePreview(QLabel):
             return
 
         bh, bw = self.base_image.shape[:2]
-        b_scale = min(self.width() / bw, self.height() / bh)
+        b_scale = min(self.width() / bw, self.height() / bh) * self.zoom_factor
         box_x = (self.width() - int(bw * b_scale)) // 2
         box_y = (self.height() - int(bh * b_scale)) // 2
 
@@ -385,7 +416,7 @@ class InteractivePreview(QLabel):
 
         if self.active_handle != -1 and self.corners is not None and self.base_image is not None:
             bh, bw = self.base_image.shape[:2]
-            b_scale = min(self.width() / bw, self.height() / bh)
+            b_scale = min(self.width() / bw, self.height() / bh) * self.zoom_factor
             box_x = (self.width() - int(bw * b_scale)) // 2
             box_y = (self.height() - int(bh * b_scale)) // 2
 
@@ -425,6 +456,15 @@ class ScanPro(QMainWindow):
         self.magic = None
         self.corners = None
         self.build_ui()
+        self.setup_shortcuts()
+
+    def setup_shortcuts(self):
+        # إضافة اختصار Ctrl + Z للتراجع
+        self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.undo_shortcut.activated.connect(self.undo_action)
+
+    def undo_action(self):
+        self.preview.undo()
 
     def build_ui(self):
         self.setStyleSheet("""
