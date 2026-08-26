@@ -1,5 +1,6 @@
 import sys
 import os
+import ctypes
 import urllib.request
 from pathlib import Path
 
@@ -181,6 +182,17 @@ def magic_pro_ai(image, corners):
 
 def svg_icon(kind, color="#111111"):
     icons = {
+        "app_icon": '''
+            <rect x="6" y="28" width="36" height="14" rx="4" fill="#0D52D6"/>
+            <rect x="8" y="30" width="32" height="10" rx="3" fill="#1865F2"/>
+            <rect x="11" y="8" width="26" height="28" rx="2" fill="#FFFFFF"/>
+            <rect x="15" y="14" width="18" height="3" rx="1.5" fill="#0D52D6"/>
+            <rect x="15" y="20" width="14" height="2.5" rx="1" fill="#0D52D6"/>
+            <rect x="15" y="25" width="10" height="2.5" rx="1" fill="#0D52D6"/>
+            <path d="M 7 14 C 12 6, 36 6, 41 14 L 38 18 C 33 11, 15 11, 10 18 Z" fill="#E6EEFF"/>
+            <rect x="2" y="21" width="44" height="4" rx="2" fill="#FF1E43"/>
+            <rect x="2" y="22" width="44" height="2" rx="1" fill="#FF8899"/>
+        ''',
         "rotate_single": f'<path d="M24 8C15.16 8 8 15.16 8 24s7.16 16 16 16c7.05 0 13-4.56 15.1-10.8" fill="none" stroke="{color}" stroke-width="4" stroke-linecap="round"/><path d="M39 12v12H27" fill="none" stroke="{color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>',
         "original": f'<rect x="10" y="6" width="28" height="36" rx="3" fill="{color}" opacity=".12"/><rect x="10" y="6" width="28" height="36" rx="3" fill="none" stroke="{color}" stroke-width="2.5"/><path d="M16 16h16M16 23h16M16 30h12M16 37h8" stroke="{color}" stroke-width="2.5"/>',
         "ai": '<text x="4" y="36" font-family="Arial" font-size="30" font-weight="700" fill="#00B89C">AI</text><path d="M39 7l2 6 6 2-6 2-2 6-2-6-6-2 6-2z" fill="#18C9A7"/>',
@@ -276,7 +288,6 @@ class InteractivePreview(QLabel):
         painter = QPainter(self)
         painter.drawPixmap(ox, oy, pix)
 
-        # Draw Corner and Edge Handles
         if self.base_image is not None and self.corners is not None and not self.eraser_active:
             bh, bw = self.base_image.shape[:2]
             b_scale = min(self.width() / bw, self.height() / bh)
@@ -295,30 +306,25 @@ class InteractivePreview(QLabel):
             for i in range(4):
                 painter.drawLine(disp_pts[i], disp_pts[(i + 1) % 4])
 
-            # Corner handles
             painter.setPen(QPen(QColor("#FFFFFF"), 2))
             painter.setBrush(QBrush(QColor("#10B99A")))
             for p in disp_pts[:4]:
                 painter.drawEllipse(p, 7, 7)
 
-            # Edge handles
             painter.setBrush(QBrush(QColor("#1677FF")))
             for p in disp_pts[4:]:
                 painter.drawRect(p.x() - 5, p.y() - 5, 10, 10)
 
-        # Custom Eraser Cursor: Dotted White Box
         if self.eraser_active:
             box_sz = int(self.brush_size * scale * 2)
             half = box_sz / 2.0
             x = self.mouse_pos.x() - half
             y = self.mouse_pos.y() - half
 
-            # Black outline underneath for visibility on white background
             painter.setPen(QPen(QColor(0, 0, 0, 180), 2, Qt.SolidLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(x - 1, y - 1, box_sz + 2, box_sz + 2)
 
-            # Dotted White Box
             painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.DashLine))
             painter.drawRect(x, y, box_sz, box_sz)
 
@@ -459,7 +465,6 @@ class ScanPro(QMainWindow):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        # Left side page list
         left = QFrame()
         left.setObjectName("left")
         left.setFixedWidth(145)
@@ -471,7 +476,6 @@ class ScanPro(QMainWindow):
         ll.addWidget(self.pages)
         body.addWidget(left)
 
-        # Center preview area
         center = QFrame()
         center.setObjectName("center")
         cl = QVBoxLayout(center)
@@ -497,7 +501,6 @@ class ScanPro(QMainWindow):
         self.add_overlay.raise_()
         body.addWidget(center, 1)
 
-        # Right sidebar (Contains toolbar & Save button elevated)
         right = QFrame()
         right.setObjectName("right")
         right.setFixedWidth(240)
@@ -533,7 +536,6 @@ class ScanPro(QMainWindow):
 
         rv.addStretch(1)
 
-        # Prominently placed visible Save button raised in the right pane
         self.save_btn = QPushButton("Save")
         self.save_btn.setObjectName("save")
         self.save_btn.clicked.connect(self.save_image)
@@ -709,9 +711,20 @@ class ScanPro(QMainWindow):
 
 
 def main():
+    try:
+        myappid = 'scanpro.ai.scanner.app.1.0'
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    
+    app_icon = make_icon("app_icon", size=64)
+    app.setWindowIcon(app_icon)
+
     window = ScanPro()
+    window.setWindowIcon(app_icon)
     window.showMaximized()
     sys.exit(app.exec())
 
