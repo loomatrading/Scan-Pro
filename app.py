@@ -213,6 +213,13 @@ def make_icon(kind, color="#111111", size=46):
     return QIcon(pix)
 
 
+def export_app_icon_file(filepath="app_icon.ico"):
+    """حفظ الأيقونة كملف .ico مستمر ليقرأه نظام ويندوز"""
+    pixmap = make_icon("app_icon", size=256).pixmap(256, 256)
+    pixmap.save(filepath, "ICO")
+    return filepath
+
+
 class InteractivePreview(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -225,8 +232,8 @@ class InteractivePreview(QLabel):
         self.active_handle = -1
         self.eraser_active = False
         self.brush_size = 24
-        self.zoom_factor = 1.0  # معامِل التكبير والتصغير
-        self.history = []       # سجل التراجع Undo
+        self.zoom_factor = 1.0
+        self.history = []
         self.mouse_pos = QPointF(-100, -100)
         self.corner_changed_callback = None
         self.image_edited_callback = None
@@ -278,7 +285,6 @@ class InteractivePreview(QLabel):
         return ox, oy, nw, nh, scale
 
     def wheelEvent(self, event):
-        # التكبير والتصغير باستخدام Ctrl + عجلة الفأرة
         if event.modifiers() & Qt.ControlModifier:
             delta = event.angleDelta().y()
             if delta > 0:
@@ -459,7 +465,6 @@ class ScanPro(QMainWindow):
         self.setup_shortcuts()
 
     def setup_shortcuts(self):
-        # إضافة اختصار Ctrl + Z للتراجع
         self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
         self.undo_shortcut.activated.connect(self.undo_action)
 
@@ -760,7 +765,10 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     
-    app_icon = make_icon("app_icon", size=64)
+    # تصدير الأيقونة برمجياً بصيغة ICO وتطبيقها مباشرةً
+    icon_path = export_app_icon_file()
+    app_icon = QIcon(icon_path)
+    
     app.setWindowIcon(app_icon)
 
     window = ScanPro()
