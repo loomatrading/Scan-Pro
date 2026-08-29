@@ -193,12 +193,26 @@ def svg_icon(kind, color="#111111"):
             <rect x="2" y="21" width="44" height="4" rx="2" fill="#FF1E43"/>
             <rect x="2" y="22" width="44" height="2" rx="1" fill="#FF8899"/>
         ''',
-        "rotate_single": f'<path d="M24 8C15.16 8 8 15.16 8 24s7.16 16 16 16c7.05 0 13-4.56 15.1-10.8" fill="none" stroke="{color}" stroke-width="4" stroke-linecap="round"/><path d="M39 12v12H27" fill="none" stroke="{color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>',
+        # أيقونة التدوير الجديدة (منزل محاط بسهم بنفسجي)
+        "rotate_single": '''
+            <path d="M 24 10 L 12 20 L 16 20 L 16 32 L 32 32 L 32 20 L 36 20 Z" fill="none" stroke="#7000FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <rect x="21" y="24" width="6" height="8" fill="none" stroke="#7000FF" stroke-width="2.5"/>
+            <path d="M 10 28 A 17 17 0 1 0 38 14" fill="none" stroke="#7000FF" stroke-width="4" stroke-linecap="round"/>
+            <path d="M 38 6 L 40 16 L 30 14 Z" fill="#7000FF"/>
+        ''',
         "original": f'<rect x="10" y="6" width="28" height="36" rx="3" fill="{color}" opacity=".12"/><rect x="10" y="6" width="28" height="36" rx="3" fill="none" stroke="{color}" stroke-width="2.5"/><path d="M16 16h16M16 23h16M16 30h12M16 37h8" stroke="{color}" stroke-width="2.5"/>',
         "ai": '<text x="4" y="36" font-family="Arial" font-size="30" font-weight="700" fill="#00B89C">AI</text><path d="M39 7l2 6 6 2-6 2-2 6-2-6-6-2 6-2z" fill="#18C9A7"/>',
         "plus": '<path d="M24 10v28M10 24h28" stroke="#999999" stroke-width="4" stroke-linecap="round"/>',
         "trash": f'<path d="M12 14h24M18 14V10h12v4M15 14v22a2 2 0 002 2h14a2 2 0 002-2V14" fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 20v10M28 20v10" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
-        "cleaner": f'<path d="M14 36l12-24 6 3-12 24z" fill="{color}"/><path d="M10 38c0 4 8 6 14 6s14-2 14-6c0-3-4-5-10-5H16c-6 0-10 2-10 5z" fill="{color}" opacity="0.8"/><path d="M36 12l4-4M32 8l2-4M40 18l4-2" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
+        # أيقونة التنظيف الجديدة (مكنسة داخل دائرة زرقاء وخضراء)
+        "cleaner": '''
+            <circle cx="24" cy="24" r="21" fill="none" stroke="#0072FF" stroke-width="3"/>
+            <path d="M 7 24 A 17 17 0 0 1 41 24" fill="none" stroke="#00C853" stroke-width="3"/>
+            <path d="M 28 10 L 36 18" stroke="#0055CC" stroke-width="4" stroke-linecap="round"/>
+            <path d="M 18 28 L 26 20" stroke="#0055CC" stroke-width="5" stroke-linecap="round"/>
+            <path d="M 12 36 L 22 26 L 16 20 L 6 30 C 6 34 8 36 12 36 Z" fill="#00C853"/>
+            <path d="M 10 32 L 6 36 M 14 34 L 10 38 M 18 32 L 15 36" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
+        ''',
     }
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">{icons[kind]}</svg>'
 
@@ -214,7 +228,6 @@ def make_icon(kind, color="#111111", size=46):
 
 
 def export_app_icon_file(filepath="app_icon.ico"):
-    """حفظ الأيقونة كملف .ico مستمر ليقرأه نظام ويندوز"""
     pixmap = make_icon("app_icon", size=256).pixmap(256, 256)
     pixmap.save(filepath, "ICO")
     return filepath
@@ -479,8 +492,8 @@ class ScanPro(QMainWindow):
         #right { border-left:1px solid #E4E5E7; background:#FFFFFF; }
         #topline { border-bottom:1px solid #E5E6E8; }
         QPushButton { border:none; }
-        QPushButton#rotate { background:#1677FF; border-radius:10px; min-width:76px; min-height:76px; }
-        QPushButton#rotate:hover { background:#0D5BCC; }
+        QPushButton#rotate { background:transparent; border-radius:10px; min-width:76px; min-height:76px; }
+        QPushButton#rotate:hover { background:#F0E6FF; }
         QPushButton#tool { background:#F0F0F0; border-radius:9px; min-width:85px; min-height:72px; }
         QPushButton#tool:hover { background:#E8E8E8; }
         QPushButton#tool[selected='true'] { background:#D9F7F1; border:1px solid #10B99A; }
@@ -556,8 +569,8 @@ class ScanPro(QMainWindow):
         self.rotate_btn = QPushButton()
         self.rotate_btn.setObjectName("rotate")
         self.rotate_btn.setFixedSize(76, 76)
-        self.rotate_btn.setIcon(make_icon("rotate_single", color="#FFFFFF", size=44))
-        self.rotate_btn.setIconSize(QSize(44, 44))
+        self.rotate_btn.setIcon(make_icon("rotate_single", size=56))
+        self.rotate_btn.setIconSize(QSize(56, 56))
         self.rotate_btn.clicked.connect(lambda: self.rotate(1))
         rv.addWidget(self.rotate_btn, 0, Qt.AlignHCenter)
 
@@ -765,7 +778,6 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     
-    # تصدير الأيقونة برمجياً بصيغة ICO وتطبيقها مباشرةً
     icon_path = export_app_icon_file()
     app_icon = QIcon(icon_path)
     
