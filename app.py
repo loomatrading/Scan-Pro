@@ -22,6 +22,15 @@ EDSR_URL = "https://github.com/Saafke/EDSR_Tensorflow/raw/master/models/EDSR_x2.
 EDSR_FILE = MODELS_DIR / "EDSR_x2.pb"
 
 
+def resource_path(relative_path):
+    """جلب المسار الصحيح للملفات سواء عند التشغيل المحلي أو بعد التجميع بـ PyInstaller"""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
 def desktop_path():
     path = Path.home() / "Desktop"
     path.mkdir(parents=True, exist_ok=True)
@@ -182,39 +191,12 @@ def magic_pro_ai(image, corners):
 
 def svg_icon(kind, color="#111111"):
     icons = {
-        "app_icon": '''
-            <rect x="6" y="28" width="36" height="14" rx="4" fill="#0D52D6"/>
-            <rect x="8" y="30" width="32" height="10" rx="3" fill="#1865F2"/>
-            <rect x="11" y="8" width="26" height="28" rx="2" fill="#FFFFFF"/>
-            <rect x="15" y="14" width="18" height="3" rx="1.5" fill="#0D52D6"/>
-            <rect x="15" y="20" width="14" height="2.5" rx="1" fill="#0D52D6"/>
-            <rect x="15" y="25" width="10" height="2.5" rx="1" fill="#0D52D6"/>
-            <path d="M 7 14 C 12 6, 36 6, 41 14 L 38 18 C 33 11, 15 11, 10 18 Z" fill="#E6EEFF"/>
-            <rect x="2" y="21" width="44" height="4" rx="2" fill="#FF1E43"/>
-            <rect x="2" y="22" width="44" height="2" rx="1" fill="#FF8899"/>
-        ''',
-        # أيقونة التدوير الجديدة (منزل محاط بسهم بنفسجي)
-        "rotate_single": '''
-            <path d="M 24 10 L 12 20 L 16 20 L 16 32 L 32 32 L 32 20 L 36 20 Z" fill="none" stroke="#7000FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-            <rect x="21" y="24" width="6" height="8" fill="none" stroke="#7000FF" stroke-width="2.5"/>
-            <path d="M 10 28 A 17 17 0 1 0 38 14" fill="none" stroke="#7000FF" stroke-width="4" stroke-linecap="round"/>
-            <path d="M 38 6 L 40 16 L 30 14 Z" fill="#7000FF"/>
-        ''',
         "original": f'<rect x="10" y="6" width="28" height="36" rx="3" fill="{color}" opacity=".12"/><rect x="10" y="6" width="28" height="36" rx="3" fill="none" stroke="{color}" stroke-width="2.5"/><path d="M16 16h16M16 23h16M16 30h12M16 37h8" stroke="{color}" stroke-width="2.5"/>',
         "ai": '<text x="4" y="36" font-family="Arial" font-size="30" font-weight="700" fill="#00B89C">AI</text><path d="M39 7l2 6 6 2-6 2-2 6-2-6-6-2 6-2z" fill="#18C9A7"/>',
         "plus": '<path d="M24 10v28M10 24h28" stroke="#999999" stroke-width="4" stroke-linecap="round"/>',
         "trash": f'<path d="M12 14h24M18 14V10h12v4M15 14v22a2 2 0 002 2h14a2 2 0 002-2V14" fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 20v10M28 20v10" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
-        # أيقونة التنظيف الجديدة (مكنسة داخل دائرة زرقاء وخضراء)
-        "cleaner": '''
-            <circle cx="24" cy="24" r="21" fill="none" stroke="#0072FF" stroke-width="3"/>
-            <path d="M 7 24 A 17 17 0 0 1 41 24" fill="none" stroke="#00C853" stroke-width="3"/>
-            <path d="M 28 10 L 36 18" stroke="#0055CC" stroke-width="4" stroke-linecap="round"/>
-            <path d="M 18 28 L 26 20" stroke="#0055CC" stroke-width="5" stroke-linecap="round"/>
-            <path d="M 12 36 L 22 26 L 16 20 L 6 30 C 6 34 8 36 12 36 Z" fill="#00C853"/>
-            <path d="M 10 32 L 6 36 M 14 34 L 10 38 M 18 32 L 15 36" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
-        ''',
     }
-    return f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">{icons[kind]}</svg>'
+    return f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">{icons.get(kind, "")}</svg>'
 
 
 def make_icon(kind, color="#111111", size=46):
@@ -227,10 +209,12 @@ def make_icon(kind, color="#111111", size=46):
     return QIcon(pix)
 
 
-def export_app_icon_file(filepath="app_icon.ico"):
-    pixmap = make_icon("app_icon", size=256).pixmap(256, 256)
-    pixmap.save(filepath, "ICO")
-    return filepath
+def get_image_icon(filename, fallback_kind, color="#111111", size=46):
+    """تحميل الأيقونة من ملف صورة، وإن لم يتوفر يستخدم رسم احتياطي"""
+    full_path = resource_path(filename)
+    if os.path.exists(full_path):
+        return QIcon(full_path)
+    return make_icon(fallback_kind, color, size)
 
 
 class InteractivePreview(QLabel):
@@ -566,11 +550,12 @@ class ScanPro(QMainWindow):
         rv.setContentsMargins(20, 20, 20, 20)
         rv.setSpacing(12)
 
+        # 1. أيقونة التدوير (السهم رقم 1)
         self.rotate_btn = QPushButton()
         self.rotate_btn.setObjectName("rotate")
         self.rotate_btn.setFixedSize(76, 76)
-        self.rotate_btn.setIcon(make_icon("rotate_single", size=56))
-        self.rotate_btn.setIconSize(QSize(56, 56))
+        self.rotate_btn.setIcon(get_image_icon("rotate.png", "rotate_single", size=64))
+        self.rotate_btn.setIconSize(QSize(64, 64))
         self.rotate_btn.clicked.connect(lambda: self.rotate(1))
         rv.addWidget(self.rotate_btn, 0, Qt.AlignHCenter)
 
@@ -579,9 +564,10 @@ class ScanPro(QMainWindow):
         line.setStyleSheet("color:#E5E5E5;")
         rv.addWidget(line)
 
+        # 2. أيقونة Cleaner (السهم رقم 2) و باقي الأزرار
         self.original_btn = self.tool_button("original", "Original", "#1677FF", self.restore_original)
         self.magic_btn = self.tool_button("ai", "Magic Pro AI", "#00B89C", self.run_magic)
-        self.cleaner_btn = self.tool_button("cleaner", "Cleaner", "#0088FF", self.toggle_cleaner)
+        self.cleaner_btn = self.tool_button_custom("cleaner.png", "Cleaner", "#0088FF", self.toggle_cleaner)
         self.delete_btn = self.tool_button("trash", "", "#D32F2F", self.delete_image, is_delete=True)
 
         self.original_btn.button.setProperty("selected", False)
@@ -612,6 +598,25 @@ class ScanPro(QMainWindow):
         b = QPushButton()
         b.setObjectName("delete" if is_delete else "tool")
         b.setIcon(make_icon(kind, color, 46))
+        b.setIconSize(QSize(46, 46))
+        b.clicked.connect(slot)
+        lay.addWidget(b)
+        if text:
+            label = QLabel(text)
+            label.setObjectName("toolText")
+            label.setAlignment(Qt.AlignCenter)
+            lay.addWidget(label)
+        box.button = b
+        return box
+
+    def tool_button_custom(self, img_file, text, color, slot):
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        b = QPushButton()
+        b.setObjectName("tool")
+        b.setIcon(get_image_icon(img_file, "cleaner", color, 46))
         b.setIconSize(QSize(46, 46))
         b.clicked.connect(slot)
         lay.addWidget(b)
@@ -778,13 +783,15 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     
-    icon_path = export_app_icon_file()
-    app_icon = QIcon(icon_path)
-    
-    app.setWindowIcon(app_icon)
+    # 3. أيقونة نافذة التطبيق وشريط المهام (السهم رقم 3)
+    ico_path = resource_path("app_icon.ico")
+    if os.path.exists(ico_path):
+        app_icon = QIcon(ico_path)
+        app.setWindowIcon(app_icon)
 
     window = ScanPro()
-    window.setWindowIcon(app_icon)
+    if os.path.exists(ico_path):
+        window.setWindowIcon(QIcon(ico_path))
     window.showMaximized()
     sys.exit(app.exec())
 
