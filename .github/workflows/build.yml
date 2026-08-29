@@ -23,23 +23,32 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install PySide6 opencv-python numpy pyinstaller
+        pip install PySide6 opencv-python numpy pyinstaller pillow
+
+    - name: Ensure Icon Files Exist
+      shell: powershell
+      run: |
+        # إنشاء ملفات افتراضية في حال عدم وجودها لمنع توقف البناء
+        if (!(Test-Path "rotate.png")) {
+            python -c "from PIL import Image; Image.new('RGBA', (64, 64), (0,0,0,0)).save('rotate.png')"
+        }
+        if (!(Test-Path "cleaner.png")) {
+            python -c "from PIL import Image; Image.new('RGBA', (64, 64), (0,0,0,0)).save('cleaner.png')"
+        }
+        if (!(Test-Path "app_icon.ico")) {
+            python -c "from PIL import Image; Image.new('RGBA', (64, 64), (0,184,156,255)).save('app_icon.ico')"
+        }
 
     - name: Build EXE with PyInstaller
+      shell: powershell
       run: |
-        pyinstaller --noconsole --onefile `
-          --add-data "rotate.png;." `
-          --add-data "cleaner.png;." `
-          --add-data "app_icon.ico;." `
-          --icon=app_icon.ico `
-          --name="ScanProAI" `
-          app.py
+        pyinstaller --noconsole --onefile --add-data "rotate.png;." --add-data "cleaner.png;." --add-data "app_icon.ico;." --icon="app_icon.ico" --name="ScanProAI" app.py
 
     - name: Prepare Artifacts
+      shell: powershell
       run: |
-        mkdir release
-        cp dist/ScanProAI.exe release/
-        cp app_icon.ico release/ 2>$null || true
+        New-Item -ItemType Directory -Force -Path release
+        Copy-Item -Path "dist/ScanProAI.exe" -Destination "release/"
 
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v4
