@@ -128,49 +128,35 @@ def perspective_transform(image, corners):
 
 
 def enhance_text_clarity(image):
-    """
-    دالة تحسين وضوح النصوص: زيادة حدة الخطوط السوداء وإزالة التعرجات
-    """
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image.copy()
 
-    # تحسين تباين النصوص وتنقيتها
     gaussian = cv2.GaussianBlur(gray, (0, 0), 3.0)
     sharpened = cv2.addWeighted(gray, 1.8, gaussian, -0.8, 0)
     return sharpened
 
 
 def document_ai_enhance(img):
-    """
-    معالجة المستند: إزالة اللون الرمادي بالكامل وتبييض الخلفية 100% مع تحسين وضوح الكلمات
-    """
     if img is None:
         return None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
 
-    # 1. تقدير الخلفية وإزالة الظلال والألوان الرمادية
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (51, 51))
     bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
     
-    # قسمة الصورة على الخلفية لتسوية الإضاءة وتبييض السطح
     norm = cv2.divide(gray, bg, scale=255.0)
     norm = np.uint8(norm)
 
-    # 2. تحسين حدة النص المدمج
     enhanced_text = enhance_text_clarity(norm)
 
-    # 3. إزالة الرماديات المتبقية وتبييض الخلفية بالكامل (Pure White Background)
-    # أي لون رمادي فاتح (أكبر من 200) يتم تحويله فوراً إلى أبيض ناصع 255
     _, white_bg = cv2.threshold(enhanced_text, 200, 255, cv2.THRESH_TOZERO)
     white_bg[white_bg >= 195] = 255
     
-    # موازنة النطاق الديناميكي
     final_gray = cv2.normalize(white_bg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
 
-    # تنظيف الحواف الخارجية للمستند
     h, w = final_gray.shape
     margin_x = max(1, int(w * 0.015))
     margin_y = max(1, int(h * 0.015))
@@ -220,7 +206,6 @@ def svg_icon(kind, color="#111111"):
     icons = {
         "original": f'<rect x="10" y="6" width="28" height="36" rx="3" fill="{color}" opacity=".12"/><rect x="10" y="6" width="28" height="36" rx="3" fill="none" stroke="{color}" stroke-width="2.5"/><path d="M16 16h16M16 23h16M16 30h12M16 37h8" stroke="{color}" stroke-width="2.5"/>',
         "ai": '<text x="4" y="36" font-family="Arial" font-size="30" font-weight="700" fill="#00B89C">AI</text><path d="M39 7l2 6 6 2-6 2-2 6-2-6-6-2 6-2z" fill="#18C9A7"/>',
-        "plus": '<path d="M24 10v28M10 24h28" stroke="#999999" stroke-width="4" stroke-linecap="round"/>',
         "trash": f'<path d="M12 14h24M18 14V10h12v4M15 14v22a2 2 0 002 2h14a2 2 0 002-2V14" fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 20v10M28 20v10" stroke="{color}" stroke-width="3" stroke-linecap="round"/>',
     }
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">{icons.get(kind, "")}</svg>'
@@ -243,39 +228,41 @@ def get_image_icon(filename, fallback_kind, color="#111111", size=46):
     return make_icon(fallback_kind, color, size)
 
 
-# --- 1. زر الزائد "+" التفاعلي المخصص ---
+# --- زر الزائد والتوسيط الدقيق وإمكانية النقر عبر كافة مساحة المربع ---
 
 class AnimatedPlusButton(QPushButton):
-    """
-    زر + تفاعلي يتجاوب بمرونة وسلاسة مع حركة وموقع الماوس
-    """
     def __init__(self, parent=None):
         super().__init__("+", parent)
-        self.setFont(QFont("Segoe UI", 48, QFont.Bold))
+        self.setFont(QFont("Segoe UI", 42, QFont.Bold))
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(120, 120)
+        self.setFixedSize(130, 130)
         
+        # ضبط الحواف والتوسيط بصرياً وهندسياً 100%
         self.default_style = """
             QPushButton {
-                background-color: #F0F0F0;
-                color: #888888;
-                border-radius: 20px;
+                background-color: #EFEFEF;
+                color: #777777;
+                border-radius: 22px;
                 border: 2px dashed #CCCCCC;
+                padding-bottom: 8px;
+                text-align: center;
             }
         """
         self.hover_style = """
             QPushButton {
                 background-color: #E6F7F5;
                 color: #00B89C;
-                border-radius: 20px;
+                border-radius: 22px;
                 border: 2px solid #00B89C;
+                padding-bottom: 8px;
+                text-align: center;
             }
         """
         self.setStyleSheet(self.default_style)
         
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(15)
-        shadow.setColor(QColor(0, 0, 0, 30))
+        shadow.setBlurRadius(16)
+        shadow.setColor(QColor(0, 0, 0, 25))
         shadow.setOffset(0, 4)
         self.setGraphicsEffect(shadow)
 
@@ -286,6 +273,20 @@ class AnimatedPlusButton(QPushButton):
     def leaveEvent(self, event):
         self.setStyleSheet(self.default_style)
         super().leaveEvent(event)
+
+
+class ClickableOverlayFrame(QFrame):
+    """حاوية مخصصة تجعل النقر في أي مكان بالإطار الخارجي يفتح النافذة"""
+    def __init__(self, click_callback, parent=None):
+        super().__init__(parent)
+        self.click_callback = click_callback
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.click_callback()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
 
 
 class InteractivePreview(QLabel):
@@ -305,6 +306,7 @@ class InteractivePreview(QLabel):
         self.mouse_pos = QPointF(-100, -100)
         self.corner_changed_callback = None
         self.image_edited_callback = None
+        self.click_to_open_callback = None
         self.setMouseTracking(True)
 
     def save_undo_state(self):
@@ -459,6 +461,10 @@ class InteractivePreview(QLabel):
                 self.image_edited_callback(self.image)
 
     def mousePressEvent(self, event):
+        if self.image is None and self.click_to_open_callback:
+            self.click_to_open_callback()
+            return
+
         pos = event.position()
         if self.eraser_active:
             self.erase_at(pos)
@@ -529,7 +535,7 @@ class ScanPro(QMainWindow):
         self.original = None
         self.magic = None
         self.corners = None
-        self.save_counter = 1  # عداد للحفظ التسلسلي للمستندات
+        self.save_counter = 1
 
         self.build_ui()
         self.setup_shortcuts()
@@ -597,13 +603,15 @@ class ScanPro(QMainWindow):
         self.preview = InteractivePreview()
         self.preview.corner_changed_callback = self.on_corners_updated
         self.preview.image_edited_callback = self.on_image_edited
+        self.preview.click_to_open_callback = self.open_image
         cl.addWidget(self.preview, 1)
 
-        # زر + التفاعلي الجديد
+        # زر + والتفاعل المحيط بالإطار بالكامل
         self.add_button = AnimatedPlusButton()
         self.add_button.clicked.connect(self.open_image)
 
-        self.add_overlay = QFrame(self.preview)
+        self.add_overlay = ClickableOverlayFrame(self.open_image, self.preview)
+        self.add_overlay.setCursor(Qt.PointingHandCursor)
         ol = QVBoxLayout(self.add_overlay)
         ol.setContentsMargins(0, 0, 0, 0)
         ol.addWidget(self.add_button, 0, Qt.AlignCenter)
@@ -618,7 +626,6 @@ class ScanPro(QMainWindow):
         rv.setContentsMargins(20, 20, 20, 20)
         rv.setSpacing(12)
 
-        # 1. أيقونة التدوير
         self.rotate_btn = QPushButton()
         self.rotate_btn.setObjectName("rotate")
         self.rotate_btn.setFixedSize(76, 76)
@@ -632,7 +639,6 @@ class ScanPro(QMainWindow):
         line.setStyleSheet("color:#E5E5E5;")
         rv.addWidget(line)
 
-        # 2. أيقونة Cleaner والأزرار الأخرى
         self.original_btn = self.tool_button("original", "Original", "#1677FF", self.restore_original)
         self.magic_btn = self.tool_button("ai", "Magic Pro AI", "#00B89C", self.run_magic)
         self.cleaner_btn = self.tool_button_custom("cleaner.png", "Cleaner", "#0088FF", self.toggle_cleaner)
@@ -823,16 +829,12 @@ class ScanPro(QMainWindow):
         self.update_overlay()
 
     def save_image(self):
-        """
-        حفظ المستندات مع توليد أرقام تسلسلية تلقائية (ScanPro_1.jpg, ScanPro_2.jpg ...)
-        """
         if self.original is None:
             QMessageBox.information(self, "Save", "Import an image first.")
             return
 
         image = self.preview.image if self.preview.image is not None else self.original
 
-        # الترقيم التلقائي مع التأكد من عدم استبدال أي ملف سابق موجود على سطح المكتب
         while True:
             default_name = f"ScanPro_{self.save_counter}.jpg"
             default_path = os.path.join(desktop_path(), default_name)
