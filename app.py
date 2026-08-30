@@ -5,26 +5,13 @@ import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QListWidget, QListWidgetItem,
-    QProgressBar, QGraphicsDropShadowEffect, QLineEdit, QCheckBox,
-    QMessageBox
+    QProgressBar, QGraphicsDropShadowEffect, QLineEdit, QMessageBox
 )
-from PySide6.QtCore import Qt, QThread, Signal, QPropertyAnimation, QEasingCurve, QRect
-from PySide6.QtGui import QImage, QPixmap, QColor, QFont, QPainter, QPen
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QImage, QPixmap, QColor, QFont, QIcon
 
 
-# --- 1. HED Model & Text Processing Helpers ---
-
-def detect_edges_hed(image):
-    """
-    اكتشاف حواف الورقة باستخدام خوارزمية ذكية مخصصة لتمييز المستندات
-    """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    # استخدام Adaptive Thresholding مع Canny المتقدم لاستخراج الحواف الحادة
-    edged = cv2.Canny(blurred, 30, 120)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    edged = cv2.dilate(edged, kernel, iterations=1)
-    return edged
+# --- 1. Text Enhancement & Edge Processing ---
 
 def enhance_text_clarity(image):
     """
@@ -32,26 +19,24 @@ def enhance_text_clarity(image):
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     
-    # إزالة الظلال عبر تقسيم الصورة على خلفيتها المُنقّاة (Illumination Correction)
+    # تصحيح الإضاءة وإزالة الظلال خلف النصوص
     dilated = cv2.dilate(gray, np.ones((7, 7), np.uint8))
     bg_img = cv2.medianBlur(dilated, 21)
     diff_img = 255 - cv2.absdiff(gray, bg_img)
     norm_img = cv2.normalize(diff_img, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1)
     
-    # زيادة وضوح الخطوط وحدتها (Unsharp Masking)
+    # زيادة حدة ووضوح الكلمات والخطوط
     gaussian = cv2.GaussianBlur(norm_img, (0, 0), 3.0)
     sharpened = cv2.addWeighted(norm_img, 1.8, gaussian, -0.8, 0)
     
-    # تحويل الصورة المحسنة إلى RGB للعرض
-    enhanced_rgb = cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
-    return enhanced_rgb
+    return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
 
 # --- 2. Custom Animated Plus Button ---
 
 class AnimatedPlusButton(QPushButton):
     """
-    زر إضافة بطابع تفاعلي يتغير حجمه ولونه بسلاسة عند مركب الفأرة
+    زر إضافة تفاعلي يتغير حجمه ولونه عند مرور مؤشر الفأرة
     """
     def __init__(self, parent=None):
         super().__init__("+", parent)
@@ -67,11 +52,11 @@ class AnimatedPlusButton(QPushButton):
             }
         """)
         
-        # تأثير الظل للزر
+        # إضافة تأثير الظل بطريقة صحيحة متوافقة مع PySide6
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(15)
         shadow.setColor(QColor(0, 184, 156, 100))
-        shadow.setOffsetY(4)
+        shadow.setOffset(0, 4)  # تصحيح الخطأ هنا
         self.setGraphicsEffect(shadow)
 
     def enterEvent(self, event):
@@ -114,7 +99,6 @@ class BatchProcessorThread(QThread):
         for idx, path in enumerate(self.file_paths):
             img = cv2.imread(path)
             if img is not None:
-                # تطبيق خوارزمية تنقية وتحسين النصوص
                 enhanced = enhance_text_clarity(img)
                 processed_results.append((path, enhanced))
             self.progress.emit(idx + 1, total, os.path.basename(path))
@@ -122,7 +106,7 @@ class BatchProcessorThread(QThread):
         self.finished.emit(processed_results)
 
 
-# --- 4. Main Window ---
+# --- 4. Main Application Window ---
 
 class ScanProAIApp(QMainWindow):
     def __init__(self):
@@ -141,10 +125,9 @@ class ScanProAIApp(QMainWindow):
 
         layout = QHBoxLayout(main_widget)
 
-        # Left Panel - Document Viewer & Controls
+        # الجانب الأيسر - منطقة العرض والتحكم
         left_panel = QVBoxLayout()
         
-        # Area for Plus Button & Status
         self.center_area = QVBoxLayout()
         self.center_area.setAlignment(Qt.AlignCenter)
 
@@ -159,8 +142,10 @@ class ScanProAIApp(QMainWindow):
 
         left_panel.addLayout(self.center_area)
 
-        # File List View
+        # قائمة الملفات مع خاصية التحديد التلقائي عند مركب الفأرة (Hover Selection)
         self.file_list = QListWidget()
+        self.file_list.setMouseTracking(True)
+        self.file_list.itemEntered.connect(self.on_item_hovered)
         self.file_list.setStyleSheet("""
             QListWidget {
                 background-color: #FFFFFF;
@@ -169,18 +154,22 @@ class ScanProAIApp(QMainWindow):
                 padding: 5px;
             }
             QListWidget::item {
-                padding: 8px;
+                padding: 10px;
                 border-bottom: 1px solid #F0F0F0;
             }
-            QListWidget::item:selected {
+            QListWidget::item:hover {
                 background-color: #E6F7F5;
                 color: #00B89C;
+            }
+            QListWidget::item:selected {
+                background-color: #00B89C;
+                color: #FFFFFF;
                 font-weight: bold;
             }
         """)
         left_panel.addWidget(self.file_list)
 
-        # Progress Bar
+        # شريط التقدم
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setStyleSheet("""
@@ -199,18 +188,16 @@ class ScanProAIApp(QMainWindow):
 
         layout.addLayout(left_panel, stretch=3)
 
-        # Right Panel - Actions & Save Options
+        # الجانب الأيمن - الخيارات والتنفيذ
         right_panel = QVBoxLayout()
         right_panel.setAlignment(Qt.AlignTop)
 
-        # Title / Logo Container
         lbl_title = QLabel("Scan Pro AI")
         lbl_title.setFont(QFont("Segoe UI", 16, QFont.Bold))
         lbl_title.setStyleSheet("color: #2C3E50; margin-bottom: 20px;")
         right_panel.addWidget(lbl_title)
 
-        # Process Button
-        self.btn_process = QPushButton("Magic Pro AI (تحسين النص والحواف)")
+        self.btn_process = QPushButton("Magic Pro AI (تحسين النص)")
         self.btn_process.setFont(QFont("Segoe UI", 11, QFont.Bold))
         self.btn_process.setCursor(Qt.PointingHandCursor)
         self.btn_process.setStyleSheet("""
@@ -232,11 +219,11 @@ class ScanProAIApp(QMainWindow):
         self.btn_process.clicked.connect(self.process_batch)
         right_panel.addWidget(self.btn_process)
 
-        # Export Box
+        # خيارات التصدير وتسمية الصور
         export_box = QVBoxLayout()
         export_box.setContentsMargins(0, 20, 0, 0)
 
-        lbl_prefix = QLabel("بادئة اسم الملفات (Prefix):")
+        lbl_prefix = QLabel("بادئة اسم الصور (Prefix):")
         lbl_prefix.setFont(QFont("Segoe UI", 10))
         export_box.addWidget(lbl_prefix)
 
@@ -251,12 +238,7 @@ class ScanProAIApp(QMainWindow):
         """)
         export_box.addWidget(self.txt_prefix)
 
-        self.chk_pdf = QCheckBox("دمج الكل في ملف PDF واحد")
-        self.chk_pdf.setFont(QFont("Segoe UI", 10))
-        self.chk_pdf.setStyleSheet("margin-top: 10px;")
-        export_box.addWidget(self.chk_pdf)
-
-        self.btn_save = QPushButton("حفظ النتائج")
+        self.btn_save = QPushButton("حفظ الصور المتسلسلة")
         self.btn_save.setFont(QFont("Segoe UI", 11, QFont.Bold))
         self.btn_save.setCursor(Qt.PointingHandCursor)
         self.btn_save.setStyleSheet("""
@@ -291,8 +273,16 @@ class ScanProAIApp(QMainWindow):
             self.file_list.clear()
             for f in files:
                 self.file_list.addItem(os.path.basename(f))
-            self.lbl_status.setText(f"تم اختيار {len(files)} ملف/ملفات جاهزة للمعالجة.")
+            self.lbl_status.setText(f"تم اختيار {len(files)} ملفات. قم بالوقوف على أي صورة لتحديدها.")
             self.btn_process.setEnabled(True)
+
+    def on_item_hovered(self, item):
+        """
+        تحديد الصورة في القائمة تلقائياً بمجرد الوقوف عليها بمؤشر الفأرة
+        """
+        if item:
+            self.file_list.setCurrentItem(item)
+            self.lbl_status.setText(f"الصورة المحددة حالياً: {item.text()}")
 
     def process_batch(self):
         if not self.loaded_files:
@@ -315,7 +305,7 @@ class ScanProAIApp(QMainWindow):
     def on_processing_finished(self, results):
         self.processed_data = results
         self.progress_bar.setVisible(False)
-        self.lbl_status.setText("اكتملت المعالجة بنجاح! يمكنك الآن حفظ الصور.")
+        self.lbl_status.setText("اكتملت المعالجة بنجاح! يمكنك الآن حفظ الصور المتسلسلة.")
         self.btn_save.setEnabled(True)
         self.btn_process.setEnabled(True)
 
@@ -329,26 +319,13 @@ class ScanProAIApp(QMainWindow):
 
         prefix = self.txt_prefix.text().strip() or "Document"
 
-        if self.chk_pdf.isChecked():
-            # حفظ كملف PDF مدمج
-            pdf_path = os.path.join(output_dir, f"{prefix}_Exported.pdf")
-            images_pil = []
-            from PIL import Image
-            for _, img_bgr in self.processed_data:
-                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(img_rgb)
-                images_pil.append(pil_img)
+        # حفظ كصور بأسماء متسلسلة (مثال: Doc_Page_001.png, Doc_Page_002.png)
+        for idx, (_, img_bgr) in enumerate(self.processed_data, start=1):
+            file_name = f"{prefix}_{idx:03d}.png"
+            full_path = os.path.join(output_dir, file_name)
+            cv2.imwrite(full_path, img_bgr)
 
-            if images_pil:
-                images_pil[0].save(pdf_path, save_all=True, append_images=images_pil[1:])
-                QMessageBox.information(self, "تم الحفظ", f"تم حفظ ملف PDF بنجاح في:\n{pdf_path}")
-        else:
-            # حفظ كصور بأسماء متسلسلة (مثال: Doc_Page_001.png)
-            for idx, (_, img_bgr) in enumerate(self.processed_data, start=1):
-                file_name = f"{prefix}_{idx:03d}.png"
-                full_path = os.path.join(output_dir, file_name)
-                cv2.imwrite(full_path, img_bgr)
-            QMessageBox.information(self, "تم الحفظ", f"تم حفظ {len(self.processed_data)} صورة بأسماء متسلسلة بنجاح!")
+        QMessageBox.information(self, "تم الحفظ", f"تم حفظ {len(self.processed_data)} صورة بأسماء وارقام متسلسلة بنجاح!")
 
 
 if __name__ == "__main__":
