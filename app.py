@@ -133,8 +133,11 @@ def enhance_text_clarity(image):
     else:
         gray = image.copy()
 
-    gaussian = cv2.GaussianBlur(gray, (0, 0), 3.0)
-    sharpened = cv2.addWeighted(gray, 1.8, gaussian, -0.8, 0)
+    # تقليل الحواف المزدوجة والحفاظ على سمك الخط الأصلي
+    gaussian = cv2.GaussianBlur(gray, (0, 0), 1.5)
+    
+    # حدادة متوازنة تمنع تضخم الخط عند الطباعة
+    sharpened = cv2.addWeighted(gray, 1.2, gaussian, -0.2, 0)
     return sharpened
 
 
@@ -144,7 +147,8 @@ def document_ai_enhance(img):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (51, 51))
+    # إزالة تدرجات خلفية الورقة مع الحفاظ على تفاصيل الأحرف الرفيعة
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
     bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
     
     norm = cv2.divide(gray, bg, scale=255.0)
@@ -152,10 +156,8 @@ def document_ai_enhance(img):
 
     enhanced_text = enhance_text_clarity(norm)
 
-    _, white_bg = cv2.threshold(enhanced_text, 200, 255, cv2.THRESH_TOZERO)
-    white_bg[white_bg >= 195] = 255
-    
-    final_gray = cv2.normalize(white_bg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
+    # الحفاظ على التدرج الرمادي الدقيق (Anti-Aliasing) لدقة فائقة عند الطباعة
+    final_gray = cv2.normalize(enhanced_text, None, 0, 255, norm_type=cv2.NORM_MINMAX)
 
     h, w = final_gray.shape
     margin_x = max(1, int(w * 0.015))
@@ -228,8 +230,6 @@ def get_image_icon(filename, fallback_kind, color="#111111", size=46):
     return make_icon(fallback_kind, color, size)
 
 
-# --- زر الزائد والتوسيط الدقيق وإمكانية النقر عبر كافة مساحة المربع ---
-
 class AnimatedPlusButton(QPushButton):
     def __init__(self, parent=None):
         super().__init__("+", parent)
@@ -237,7 +237,7 @@ class AnimatedPlusButton(QPushButton):
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(130, 130)
         
-        # ضبط الحواف والتوسيط بصرياً وهندسياً 100%
+        # توسيط الزائد ودقة الأبعاد بصرياً
         self.default_style = """
             QPushButton {
                 background-color: #EFEFEF;
@@ -276,7 +276,7 @@ class AnimatedPlusButton(QPushButton):
 
 
 class ClickableOverlayFrame(QFrame):
-    """حاوية مخصصة تجعل النقر في أي مكان بالإطار الخارجي يفتح النافذة"""
+    """حاوية مخصصة للضغط في أي مكان ضمن نطاق المربع"""
     def __init__(self, click_callback, parent=None):
         super().__init__(parent)
         self.click_callback = click_callback
