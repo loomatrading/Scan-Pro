@@ -1,4 +1,4 @@
-import sys
+رimport sys
 import os
 import ctypes
 import urllib.request
@@ -133,29 +133,29 @@ def document_ai_enhance(img):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
 
-    # 1. تنعيم خفيف جداً لمنع الشوشرة الدقيقة بدون التأثير على خط النصوص
-    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    # 1. استخراج خلفية الورقة والإضاءة بدقة
+    dilated = cv2.dilate(gray, np.ones((7, 7), np.uint8))
+    bg = cv2.medianBlur(dilated, 21)
+    
+    # 2. إزالة الظلال وتصفية خلفية المستند لجعلها ناصعة البياض
+    diff = 255 - cv2.absdiff(gray, bg)
+    norm = cv2.normalize(diff, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
 
-    # 2. تطبيق عتبة متكيفة (Adaptive Thresholding) لضمان خلفية بيضاء صافية تماماً (255)
-    # مع الحفاظ على الخطوط رفيعة وحادة بشكل ممتاز للطباعة
-    binary = cv2.adaptiveThreshold(
-        blurred, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        21, 11
-    )
+    # 3. دفع الخلفية البيضاء القريبة من البياض لتصبح بيضاء ناصعة (255) مع الحفاظ على درجة الخط رفيعة
+    # تمديد التباين (Gamma / Linear Scaling)
+    result = cv2.addWeighted(norm, 1.3, norm, 0, -35)
 
-    # 3. تنظيف حواف المستند الخارجية لجعلها بيضاء ناصعة
-    h, w = binary.shape
+    # 4. تنظيف حواف المستند الخارجية
+    h, w = result.shape
     margin_x = max(1, int(w * 0.012))
     margin_y = max(1, int(h * 0.012))
     
-    binary[:margin_y, :] = 255
-    binary[-margin_y:, :] = 255
-    binary[:, :margin_x] = 255
-    binary[:, -margin_x:] = 255
+    result[:margin_y, :] = 255
+    result[-margin_y:, :] = 255
+    result[:, :margin_x] = 255
+    result[:, -margin_x:] = 255
 
-    return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+    return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
 
 
 def ai_super_resolution(img):
