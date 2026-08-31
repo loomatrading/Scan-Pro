@@ -127,48 +127,35 @@ def perspective_transform(image, corners):
                                borderMode=cv2.BORDER_REPLICATE)
 
 
-def enhance_text_clarity(image):
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
-
-    # تقليل الحواف المزدوجة والحفاظ على سمك الخط الأصلي
-    gaussian = cv2.GaussianBlur(gray, (0, 0), 1.5)
-    
-    # حدادة متوازنة تمنع تضخم الخط عند الطباعة
-    sharpened = cv2.addWeighted(gray, 1.2, gaussian, -0.2, 0)
-    return sharpened
-
-
 def document_ai_enhance(img):
     if img is None:
         return None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
 
-    # إزالة تدرجات خلفية الورقة مع الحفاظ على تفاصيل الأحرف الرفيعة
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
-    bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    # 1. تنعيم خفيف جداً لمنع الشوشرة الدقيقة بدون التأثير على خط النصوص
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    # 2. تطبيق عتبة متكيفة (Adaptive Thresholding) لضمان خلفية بيضاء صافية تماماً (255)
+    # مع الحفاظ على الخطوط رفيعة وحادة بشكل ممتاز للطباعة
+    binary = cv2.adaptiveThreshold(
+        blurred, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        21, 11
+    )
+
+    # 3. تنظيف حواف المستند الخارجية لجعلها بيضاء ناصعة
+    h, w = binary.shape
+    margin_x = max(1, int(w * 0.012))
+    margin_y = max(1, int(h * 0.012))
     
-    norm = cv2.divide(gray, bg, scale=255.0)
-    norm = np.uint8(norm)
+    binary[:margin_y, :] = 255
+    binary[-margin_y:, :] = 255
+    binary[:, :margin_x] = 255
+    binary[:, -margin_x:] = 255
 
-    enhanced_text = enhance_text_clarity(norm)
-
-    # الحفاظ على التدرج الرمادي الدقيق (Anti-Aliasing) لدقة فائقة عند الطباعة
-    final_gray = cv2.normalize(enhanced_text, None, 0, 255, norm_type=cv2.NORM_MINMAX)
-
-    h, w = final_gray.shape
-    margin_x = max(1, int(w * 0.015))
-    margin_y = max(1, int(h * 0.015))
-    
-    final_gray[:margin_y, :] = 255
-    final_gray[-margin_y:, :] = 255
-    final_gray[:, :margin_x] = 255
-    final_gray[:, -margin_x:] = 255
-
-    return cv2.cvtColor(final_gray, cv2.COLOR_GRAY2BGR)
+    return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
 
 
 def ai_super_resolution(img):
@@ -237,7 +224,6 @@ class AnimatedPlusButton(QPushButton):
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(130, 130)
         
-        # توسيط الزائد ودقة الأبعاد بصرياً
         self.default_style = """
             QPushButton {
                 background-color: #EFEFEF;
