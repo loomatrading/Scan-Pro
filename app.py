@@ -1,4 +1,4 @@
-رimport sys
+import sys
 import os
 import ctypes
 import urllib.request
@@ -23,7 +23,6 @@ EDSR_FILE = MODELS_DIR / "EDSR_x2.pb"
 
 
 def resource_path(relative_path):
-    """جلب المسار الصحيح للملفات سواء عند التشغيل المحلي أو بعد التجميع بـ PyInstaller"""
     try:
         base_path = sys._MEIPASS
     except Exception:
@@ -133,29 +132,29 @@ def document_ai_enhance(img):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
 
-    # 1. استخراج خلفية الورقة والإضاءة بدقة
-    dilated = cv2.dilate(gray, np.ones((7, 7), np.uint8))
-    bg = cv2.medianBlur(dilated, 21)
+    # 1. استخدام التوزيع الظلي لعزل الخلفية مع المحافظة على دقة الحروف الدقيقة
+    bg = cv2.GaussianBlur(gray, (51, 51), 0)
     
-    # 2. إزالة الظلال وتصفية خلفية المستند لجعلها ناصعة البياض
-    diff = 255 - cv2.absdiff(gray, bg)
-    norm = cv2.normalize(diff, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+    # 2. قسمة الصورة على الخلفية لتبييض المساحات الفارغة دون تضخيم الخط
+    norm = cv2.divide(gray, bg, scale=255.0)
 
-    # 3. دفع الخلفية البيضاء القريبة من البياض لتصبح بيضاء ناصعة (255) مع الحفاظ على درجة الخط رفيعة
-    # تمديد التباين (Gamma / Linear Scaling)
-    result = cv2.addWeighted(norm, 1.3, norm, 0, -35)
+    # 3. توضيح معالم النص الرفيع عبر تمديد النطاق الديناميكي (Contrast Stretch)
+    norm = cv2.normalize(norm, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+    
+    # 4. تفتيح إضافي للرماديات الضعيفة في الخلفية لضمان البياض التام
+    _, thresh = cv2.threshold(norm, 230, 255, cv2.THRESH_TOZERO)
 
-    # 4. تنظيف حواف المستند الخارجية
-    h, w = result.shape
+    # 5. تنظيف الحواف الخارجية
+    h, w = thresh.shape
     margin_x = max(1, int(w * 0.012))
     margin_y = max(1, int(h * 0.012))
     
-    result[:margin_y, :] = 255
-    result[-margin_y:, :] = 255
-    result[:, :margin_x] = 255
-    result[:, -margin_x:] = 255
+    thresh[:margin_y, :] = 255
+    thresh[-margin_y:, :] = 255
+    thresh[:, :margin_x] = 255
+    thresh[:, -margin_x:] = 255
 
-    return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
+    return cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
 
 
 def ai_super_resolution(img):
@@ -262,7 +261,6 @@ class AnimatedPlusButton(QPushButton):
 
 
 class ClickableOverlayFrame(QFrame):
-    """حاوية مخصصة للضغط في أي مكان ضمن نطاق المربع"""
     def __init__(self, click_callback, parent=None):
         super().__init__(parent)
         self.click_callback = click_callback
@@ -311,7 +309,9 @@ class InteractivePreview(QLabel):
     def set_data(self, image, corners=None, base_image=None):
         if image is not None and self.image is not None:
             self.save_undo_state()
-        self.image = image
+        
+        self.image = image.copy() if image is not None else None
+        
         if base_image is not None:
             self.base_image = base_image
         elif self.base_image is None:
@@ -319,7 +319,9 @@ class InteractivePreview(QLabel):
 
         if corners is not None:
             self.corners = corners.copy()
+            
         self.update()
+        QApplication.processEvents()
 
     def set_eraser_mode(self, active):
         self.eraser_active = active
@@ -592,7 +594,6 @@ class ScanPro(QMainWindow):
         self.preview.click_to_open_callback = self.open_image
         cl.addWidget(self.preview, 1)
 
-        # زر + والتفاعل المحيط بالإطار بالكامل
         self.add_button = AnimatedPlusButton()
         self.add_button.clicked.connect(self.open_image)
 
@@ -785,6 +786,7 @@ class ScanPro(QMainWindow):
             self.original_btn.button.setProperty("selected", False)
             self.cleaner_btn.button.setProperty("selected", False)
             self.update_button_styles()
+            self.preview.repaint()
         except Exception as exc:
             QMessageBox.warning(self, "Magic Pro AI", f"AI processing failed:\n{exc}")
         finally:
