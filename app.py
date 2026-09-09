@@ -153,9 +153,11 @@ def perspective_transform(image, corners):
 
 def document_ai_enhance(img):
     """
-    معالجة مخصصة للمستندات النصية.
-    الهدف: خلفية بيضاء ناصعة مع المحافظة على سمك الحروف
-    ووضوحها بدون جعلها Bold.
+    معالجة المستندات النصية مع الحفاظ على السمك الطبيعي للحروف.
+    الهدف:
+    - خلفية بيضاء ونظيفة.
+    - نص واضح وحاد بدون Bold أو زيادة مصطنعة في سمك الحروف.
+    - عدم فقدان التفاصيل الدقيقة.
     """
 
     if img is None:
@@ -166,64 +168,41 @@ def document_ai_enhance(img):
         if len(img.shape) == 3 else img.copy()
     )
 
+    # العمل بدقة 8-bit مع تصحيح الإضاءة غير المتجانسة.
     gray = gray.astype(np.float32)
 
-    # تصحيح تفاوت الإضاءة والخلفية
+    # تقدير لون/إضاءة الورقة من خلال Blur كبير.
     background = cv2.GaussianBlur(gray, (0, 0), 25)
-    background = np.maximum(background, 1)
+    background = np.maximum(background, 1.0)
 
+    # إزالة تفاوت الإضاءة بدون Threshold أسود/أبيض قاسٍ.
     normalized = (gray / background) * 255.0
     normalized = np.clip(normalized, 0, 255).astype(np.uint8)
 
-    # تحسين تباين خفيف حتى لا تصبح الحروف سميكة
+    # Contrast خفيف جدًا فقط.
+    # رفع clipLimit كان يجعل الحروف تبدو أثقل؛ لذلك نستخدم قيمة منخفضة.
     clahe = cv2.createCLAHE(
-        clipLimit=1.15,
-        tileGridSize=(8, 8)
+        clipLimit=0.65,
+        tileGridSize=(12, 12)
     )
     enhanced = clahe.apply(normalized)
 
-    # إزالة التشويش الخفيف
-    denoised = cv2.fastNlMeansDenoising(
-        enhanced, None, h=2,
-        templateWindowSize=7,
-        searchWindowSize=21
-    )
+    # لا نستخدم Sharpen أو FastNLMeans هنا؛ كلاهما قد يجعل الخط يبدو أثقل.
+    result = enhanced.astype(np.float32)
 
-    # Sharpen خفيف جدًا
-    blur = cv2.GaussianBlur(denoised, (0, 0), 0.7)
-    sharpened = cv2.addWeighted(
-        denoised, 1.16, blur, -0.16, 0
-    )
-    sharpened = np.clip(
-        sharpened, 0, 255
-    ).astype(np.uint8)
+    # تليين بسيط جدًا للدرجات الفاتحة فقط، مع إبقاء الحروف الداكنة كما هي.
+    # هذا يحافظ على تفاصيل الحروف ولا يحولها إلى Bold.
+    light_mask = np.clip((result - 180.0) / 75.0, 0.0, 1.0)
+    light_mask = light_mask * light_mask * (3.0 - 2.0 * light_mask)
+    result = result * (1.0 - light_mask) + 255.0 * light_mask
 
-    # تبييض تدريجي للخلفية، بدون Threshold قاسٍ
-    value = sharpened.astype(np.float32)
-    start = 195.0
-
-    mask = np.clip(
-        (value - start) / (255.0 - start),
-        0.0, 1.0
-    )
-
-    # Smoothstep
-    mask = mask * mask * (3.0 - 2.0 * mask)
-
-    result = value * (1.0 - mask) + 255.0 * mask
     result = np.clip(result, 0, 255).astype(np.uint8)
 
-    # المناطق شديدة البياض تصبح أبيض نقي
-    local = cv2.GaussianBlur(result, (0, 0), 2.5)
-
-    white_mask = (local > 248) & (result > 240)
+    # أبيض نقي للمناطق التي هي بالفعل قريبة جدًا من الأبيض.
+    white_mask = result >= 249
     result[white_mask] = 255
 
-    # تنظيف خفيف جدًا للخلفية
-    very_light = result > 225
-    result[very_light & (local > 238)] = 255
-
-    # تنظيف الحواف
+    # تنظيف خفيف للحواف الخارجية فقط.
     h, w = result.shape
     margin_x = max(2, int(w * 0.006))
     margin_y = max(2, int(h * 0.006))
@@ -890,6 +869,10 @@ class ScanPro(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1000, 650)
 
+        # كل صورة مفتوحة لها حالتها المستقلة:
+        # original / corners / magic
+        self.documents = []
+        self.current_index = -1
         self.original = None
         self.magic = None
         self.corners = None
@@ -1027,7 +1010,7 @@ class ScanPro(QMainWindow):
 
         left = QFrame()
         left.setObjectName("left")
-        left.setFixedWidth(145)
+        left.setFixedWidth(150)
 
         ll = QVBoxLayout(left)
         ll.setContentsMargins(10, 20, 10, 15)
@@ -1300,33 +1283,63 @@ class ScanPro(QMainWindow):
             self.add_overlay.hide()
 
     def open_image(self):
-        fn, _ = QFileDialog.getOpenFileName(
+        """
+        فتح صورة واحدة أو عدة صور معًا.
+        كل صورة تصبح صفحة مستقلة في العمود الأيسر.
+        """
+        filenames, _ = QFileDialog.getOpenFileNames(
             self,
             "Import Images",
             desktop_path(),
             "Images (*.jpg *.jpeg *.png *.bmp *.tif *.tiff)"
         )
 
-        if not fn:
+        if not filenames:
             return
 
-        image = cv2.imread(
-            fn,
-            cv2.IMREAD_COLOR
-        )
+        # حفظ حالة الصفحة الحالية قبل إضافة الصور الجديدة.
+        self.store_current_document()
 
-        if image is None:
+        first_new_index = len(self.documents)
+
+        for fn in filenames:
+            image = cv2.imread(fn, cv2.IMREAD_COLOR)
+
+            if image is None:
+                continue
+
+            corners = detect_document_corners(image)
+
+            doc = {
+                "path": fn,
+                "name": Path(fn).name,
+                "original": image,
+                "corners": corners,
+                "magic": None,
+            }
+            self.documents.append(doc)
+
+            # إنشاء thumbnail في العمود الأيسر.
+            self.add_page_thumbnail(image, Path(fn).name)
+
+        if len(self.documents) == 0:
             QMessageBox.critical(
                 self,
                 "Error",
-                "Cannot open this image."
+                "Cannot open the selected images."
             )
             return
 
-        self.original = image
-        self.corners = detect_document_corners(image)
-        self.magic = None
+        # اعرض أول صورة من المجموعة الجديدة.
+        self.pages.blockSignals(True)
+        self.pages.setCurrentRow(first_new_index)
+        self.pages.blockSignals(False)
+        self.load_document(first_new_index)
 
+        self.update_overlay()
+
+    def add_page_thumbnail(self, image, name=""):
+        """إضافة صورة إلى العمود الأيسر بدون حذف الصور السابقة."""
         h, w = image.shape[:2]
         scale = min(105 / w, 135 / h)
 
@@ -1339,11 +1352,7 @@ class ScanPro(QMainWindow):
             interpolation=cv2.INTER_AREA
         )
 
-        rgb = cv2.cvtColor(
-            small,
-            cv2.COLOR_BGR2RGB
-        )
-
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         qimg = QImage(
             rgb.data,
             pw,
@@ -1353,17 +1362,70 @@ class ScanPro(QMainWindow):
         )
 
         item = QListWidgetItem()
-        item.setIcon(
-            QIcon(QPixmap.fromImage(qimg))
-        )
+        item.setIcon(QIcon(QPixmap.fromImage(qimg)))
         item.setSizeHint(QSize(115, 150))
 
-        self.pages.clear()
-        self.pages.addItem(item)
-        self.pages.setCurrentRow(0)
+        if name:
+            item.setToolTip(name)
 
-        self.run_magic()
+        self.pages.addItem(item)
+
+    def store_current_document(self):
+        """حفظ آخر حالة للصورة الحالية قبل الانتقال لصورة أخرى."""
+        if not (0 <= self.current_index < len(self.documents)):
+            return
+
+        doc = self.documents[self.current_index]
+
+        if self.original is not None:
+            doc["original"] = self.original
+
+        if self.corners is not None:
+            doc["corners"] = np.asarray(
+                self.corners,
+                dtype=np.float32
+            ).copy()
+
+        if self.magic is not None:
+            doc["magic"] = self.magic
+
+    def load_document(self, index):
+        """تحميل صفحة محددة من العمود الأيسر."""
+        if not (0 <= index < len(self.documents)):
+            return
+
+        self.store_current_document()
+
+        doc = self.documents[index]
+
+        self.current_index = index
+        self.original = doc["original"]
+        self.corners = (
+            np.asarray(doc["corners"], dtype=np.float32).copy()
+            if doc["corners"] is not None else None
+        )
+        self.magic = doc.get("magic")
+
+        # عند اختيار صفحة نعرض Magic Pro AI الخاصة بها.
+        # ويمكن الضغط على Original لتعديل التحديد.
+        if self.magic is None:
+            self.run_magic()
+        else:
+            self.preview.set_eraser_mode(False)
+            self.preview.set_selection_enabled(False)
+            self.preview.set_data(
+                self.magic,
+                self.corners,
+                base_image=self.original
+            )
+
+            self.magic_btn.button.setProperty("selected", True)
+            self.original_btn.button.setProperty("selected", False)
+            self.cleaner_btn.button.setProperty("selected", False)
+            self.update_button_styles()
+
         self.update_overlay()
+
 
     def toggle_cleaner(self):
         if self.original is None:
@@ -1381,30 +1443,39 @@ class ScanPro(QMainWindow):
         self.update_button_styles()
 
     def on_corners_updated(self, updated_corners):
-        self.corners = updated_corners
+        self.corners = np.asarray(
+            updated_corners,
+            dtype=np.float32
+        ).copy()
 
-        if self.magic_btn.button.property(
-            "selected"
-        ):
-            self.run_magic()
+        if 0 <= self.current_index < len(self.documents):
+            self.documents[self.current_index]["corners"] = self.corners.copy()
+
+        # أثناء Original لا نعيد تشغيل Magic AI تلقائيًا مع كل حركة.
+        # هذا يجعل التحديد اليدوي سلسًا ويحافظ على الاختيار حتى يتم الضغط على Magic.
+        return
 
     def on_image_edited(self, edited_img):
-        if self.magic_btn.button.property(
-            "selected"
-        ):
-            self.magic = edited_img.copy()
-
-    def select_page(self, row):
-        if row < 0 or self.original is None:
+        if edited_img is None:
             return
 
-        self.restore_original()
+        self.magic = edited_img.copy()
+
+        if 0 <= self.current_index < len(self.documents):
+            self.documents[self.current_index]["magic"] = self.magic.copy()
+
+    def select_page(self, row):
+        if row < 0 or row >= len(self.documents):
+            return
+
+        self.load_document(row)
 
     def restore_original(self):
         if self.original is None:
             return
 
         self.preview.set_eraser_mode(False)
+
         # التحديد اليدوي متاح فقط في Original.
         self.preview.set_selection_enabled(True)
 
@@ -1414,17 +1485,12 @@ class ScanPro(QMainWindow):
             base_image=self.original
         )
 
-        self.original_btn.button.setProperty(
-            "selected", True
-        )
-        self.magic_btn.button.setProperty(
-            "selected", False
-        )
-        self.cleaner_btn.button.setProperty(
-            "selected", False
-        )
+        self.original_btn.button.setProperty("selected", True)
+        self.magic_btn.button.setProperty("selected", False)
+        self.cleaner_btn.button.setProperty("selected", False)
 
         self.update_button_styles()
+
 
     def run_magic(self):
         if self.original is None:
@@ -1442,8 +1508,14 @@ class ScanPro(QMainWindow):
                 self.corners
             )
 
+            if 0 <= self.current_index < len(self.documents):
+                self.documents[self.current_index]["magic"] = self.magic.copy()
+                self.documents[self.current_index]["corners"] = (
+                    np.asarray(self.corners, dtype=np.float32).copy()
+                )
+
             self.preview.set_eraser_mode(False)
-            # Magic Pro AI يعرض النتيجة كصفحة عادية بدون أي مقابض أو خطوط تفاعلية.
+            # Magic Pro AI صفحة عادية تمامًا: لا نقاط ولا خطوط ولا تحديد تفاعلي.
             self.preview.set_selection_enabled(False)
 
             self.preview.set_data(
@@ -1486,44 +1558,87 @@ class ScanPro(QMainWindow):
             btn.update()
 
     def rotate(self, direction):
-        if self.original is None:
+        if self.original is None or not (0 <= self.current_index < len(self.documents)):
             return
+
+        # حفظ الصورة الحالية في السجل قبل التدوير.
+        self.store_current_document()
 
         self.original = cv2.rotate(
             self.original,
             cv2.ROTATE_90_CLOCKWISE
         )
 
-        self.corners = detect_document_corners(
-            self.original
-        )
+        self.corners = detect_document_corners(self.original)
+        self.magic = None
 
-        if self.magic_btn.button.property(
-            "selected"
-        ):
+        doc = self.documents[self.current_index]
+        doc["original"] = self.original
+        doc["corners"] = self.corners.copy()
+        doc["magic"] = None
+
+        # تحديث thumbnail للصورة الحالية.
+        item = self.pages.item(self.current_index)
+        if item is not None:
+            h, w = self.original.shape[:2]
+            scale = min(105 / w, 135 / h)
+            pw = max(1, int(w * scale))
+            ph = max(1, int(h * scale))
+            small = cv2.resize(
+                self.original,
+                (pw, ph),
+                interpolation=cv2.INTER_AREA
+            )
+            rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            qimg = QImage(
+                rgb.data,
+                pw,
+                ph,
+                rgb.strides[0],
+                QImage.Format_RGB888
+            )
+            item.setIcon(QIcon(QPixmap.fromImage(qimg)))
+
+        if self.magic_btn.button.property("selected"):
             self.run_magic()
         else:
             self.restore_original()
 
     def delete_image(self):
+        if not (0 <= self.current_index < len(self.documents)):
+            return
+
+        index = self.current_index
+
+        self.documents.pop(index)
+        self.pages.takeItem(index)
+
         self.original = None
         self.magic = None
         self.corners = None
-
-        self.pages.clear()
+        self.current_index = -1
 
         self.preview.set_eraser_mode(False)
         self.preview.set_selection_enabled(True)
-        self.preview.set_data(
-            None,
-            None,
-            None
-        )
+        self.preview.set_data(None, None, None)
+
+        if self.documents:
+            new_index = min(index, len(self.documents) - 1)
+            self.pages.blockSignals(True)
+            self.pages.setCurrentRow(new_index)
+            self.pages.blockSignals(False)
+            self.load_document(new_index)
 
         self.update_overlay()
 
+
     def save_image(self):
-        if self.original is None:
+        """
+        حفظ الصورة المحددة حاليًا من العمود الأيسر.
+        - Original: يتم تطبيق التحديد اليدوي فعليًا قبل الحفظ.
+        - Magic Pro AI: يتم حفظ نتيجة AI بدون أي خطوط/مقابض.
+        """
+        if self.original is None or not (0 <= self.current_index < len(self.documents)):
             QMessageBox.information(
                 self,
                 "Save",
@@ -1531,9 +1646,11 @@ class ScanPro(QMainWindow):
             )
             return
 
-        # في وضع Original يجب تطبيق التحديد اليدوي فعلياً على الملف المحفوظ.
-        # لا نحفظ الصورة الأصلية كاملة كما كان يحدث سابقاً.
+        # احفظ أحدث حالة قبل التصدير.
+        self.store_current_document()
+
         if self.original_btn.button.property("selected") and self.corners is not None:
+            # Original: تطبيق التحديد اليدوي فعليًا.
             try:
                 image = perspective_transform(
                     self.original,
@@ -1547,17 +1664,19 @@ class ScanPro(QMainWindow):
                 )
                 return
         else:
+            # Magic Pro AI أو أي تعديل موجود على الصفحة المحددة.
             image = (
-                self.preview.image
-                if self.preview.image is not None
-                else self.original
+                self.magic
+                if self.magic is not None
+                else self.preview.image
             )
 
-        # PNG هو الاختيار الافتراضي للمستندات النصية
+            if image is None:
+                image = self.original
+
         while True:
-            default_name = (
-                f"ScanPro_{self.save_counter}.png"
-            )
+            # رقم الملف يعتمد على الصفحة الحالية حتى يمكن حفظ كل الصفحات.
+            default_name = f"ScanPro_{self.save_counter}.png"
             default_path = os.path.join(
                 desktop_path(),
                 default_name
@@ -1580,9 +1699,7 @@ class ScanPro(QMainWindow):
 
         lower = fn.lower()
 
-        if not lower.endswith(
-            (".jpg", ".jpeg", ".png")
-        ):
+        if not lower.endswith((".jpg", ".jpeg", ".png")):
             if "JPEG" in selected_filter:
                 fn += ".jpg"
             else:
@@ -1604,7 +1721,7 @@ class ScanPro(QMainWindow):
 
             if ok:
                 self.save_counter += 1
-                # لا توجد رسالة بعد الحفظ
+                # لا توجد رسالة بعد الحفظ.
             else:
                 QMessageBox.critical(
                     self,
@@ -1618,6 +1735,7 @@ class ScanPro(QMainWindow):
                 "Save",
                 f"Could not save the image:\n{exc}"
             )
+
 
 
 def main():
