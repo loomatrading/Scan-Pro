@@ -153,60 +153,73 @@ def perspective_transform(image, corners):
 
 def document_ai_enhance(img):
     """
-    معالجة المستندات النصية مع الحفاظ على السمك الطبيعي للحروف.
-    الهدف:
-    - خلفية بيضاء ونظيفة.
-    - نص واضح وحاد بدون Bold أو زيادة مصطنعة في سمك الحروف.
-    - عدم فقدان التفاصيل الدقيقة.
-    """
+    تحسين مستندات النصوص فقط.
 
+    الهدف هو الوصول إلى شكل قريب من النسخة الأصلية الواضحة:
+    - حروف داكنة وواضحة وطبيعية، بدون جعلها Bold.
+    - خلفية بيضاء ونظيفة.
+    - الحفاظ على التفاصيل الدقيقة للنص.
+    - عدم استخدام Threshold قاسٍ يحول الحروف إلى كتل سميكة.
+    """
     if img is None:
         return None
 
-    gray = (
-        cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        if len(img.shape) == 3 else img.copy()
-    )
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
+    gray = np.asarray(gray, dtype=np.uint8)
 
-    # العمل بدقة 8-bit مع تصحيح الإضاءة غير المتجانسة.
-    gray = gray.astype(np.float32)
+    # ------------------------------------------------------------
+    # 1) تصحيح الإضاءة والورق
+    # ------------------------------------------------------------
+    # Blur كبير يمثل لون الورقة والإضاءة العامة فقط، وليس الحروف.
+    background = cv2.GaussianBlur(gray, (0, 0), 31)
+    background = np.maximum(background.astype(np.float32), 1.0)
 
-    # تقدير لون/إضاءة الورقة من خلال Blur كبير.
-    background = cv2.GaussianBlur(gray, (0, 0), 25)
-    background = np.maximum(background, 1.0)
+    # تطبيع نسبي يحافظ على الحروف الداكنة ويزيل الظلال والرمادي من الورق.
+    normalized = (gray.astype(np.float32) / background) * 255.0
+    normalized = np.clip(normalized, 0, 255)
 
-    # إزالة تفاوت الإضاءة بدون Threshold أسود/أبيض قاسٍ.
-    normalized = (gray / background) * 255.0
-    normalized = np.clip(normalized, 0, 255).astype(np.uint8)
-
-    # Contrast خفيف جدًا فقط.
-    # رفع clipLimit كان يجعل الحروف تبدو أثقل؛ لذلك نستخدم قيمة منخفضة.
-    clahe = cv2.createCLAHE(
-        clipLimit=0.65,
-        tileGridSize=(12, 12)
-    )
-    enhanced = clahe.apply(normalized)
-
-    # لا نستخدم Sharpen أو FastNLMeans هنا؛ كلاهما قد يجعل الخط يبدو أثقل.
-    result = enhanced.astype(np.float32)
-
-    # تليين بسيط جدًا للدرجات الفاتحة فقط، مع إبقاء الحروف الداكنة كما هي.
-    # هذا يحافظ على تفاصيل الحروف ولا يحولها إلى Bold.
-    light_mask = np.clip((result - 180.0) / 75.0, 0.0, 1.0)
-    light_mask = light_mask * light_mask * (3.0 - 2.0 * light_mask)
-    result = result * (1.0 - light_mask) + 255.0 * light_mask
-
+    # ------------------------------------------------------------
+    # 2) زيادة وضوح النص بدون زيادة سمك الحروف
+    # ------------------------------------------------------------
+    # نضغط فقط الدرجات المتوسطة/الداكنة قليلًا.
+    # هذا يجعل النص قريبًا من BEFORE بدل أن يكون باهتًا مثل AFTER.
+    dark = np.clip((245.0 - normalized) / 245.0, 0.0, 1.0)
+    dark = np.power(dark, 0.92)
+    result = 255.0 - dark * 255.0 * 1.10
     result = np.clip(result, 0, 255).astype(np.uint8)
 
-    # أبيض نقي للمناطق التي هي بالفعل قريبة جدًا من الأبيض.
-    white_mask = result >= 249
-    result[white_mask] = 255
+    # ------------------------------------------------------------
+    # 3) Sharpen خفيف جدًا للحواف فقط
+    # ------------------------------------------------------------
+    # Unsharp mask لا يقوم بتوسيع الحروف مثل العمليات المورفولوجية.
+    soft = cv2.GaussianBlur(result, (0, 0), 0.75)
+    sharp = cv2.addWeighted(result, 1.32, soft, -0.32, 0)
 
-    # تنظيف خفيف للحواف الخارجية فقط.
+    # مزج محدود جدًا حتى لا تصبح الحروف أثقل.
+    result = cv2.addWeighted(result, 0.72, sharp, 0.28, 0)
+
+    # ------------------------------------------------------------
+    # 4) جعل الورق الأبيض أبيض ناصعًا
+    # ------------------------------------------------------------
+    # أي منطقة قريبة من الأبيض تتحول إلى أبيض كامل.
+    # لا نطبق ذلك على الدرجات الداكنة حتى لا نفقد تفاصيل الحروف.
+    white = result >= 238
+    result[white] = 255
+
+    # تبييض تدريجي للدرجات 225-238 بدل القطع المفاجئ.
+    mid = (result >= 225) & (result < 238)
+    if np.any(mid):
+        result[mid] = np.clip(
+            238 + (result[mid].astype(np.int16) - 225) * 17 // 13,
+            0, 255
+        ).astype(np.uint8)
+
+    # ------------------------------------------------------------
+    # 5) تنظيف الحواف الخارجية
+    # ------------------------------------------------------------
     h, w = result.shape
     margin_x = max(2, int(w * 0.006))
     margin_y = max(2, int(h * 0.006))
-
     result[:margin_y, :] = 255
     result[-margin_y:, :] = 255
     result[:, :margin_x] = 255
@@ -240,14 +253,12 @@ def ai_super_resolution(img):
 
 
 def magic_pro_ai(image, corners):
-    if image is None:
-        return None
-
+    """
+    Magic Pro AI مخصص للصور التي تحتوي على نص.
+    لا نستخدم EDSR هنا لأن Super Resolution قد يغير شكل الحروف أو يجعلها أثقل.
+    """
     scanned = perspective_transform(image, corners)
-    scanned = ai_super_resolution(scanned)
-    scanned = document_ai_enhance(scanned)
-
-    return scanned
+    return document_ai_enhance(scanned)
 
 
 def svg_icon(kind, color="#111111"):
