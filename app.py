@@ -153,106 +153,69 @@ def perspective_transform(image, corners):
 
 def document_ai_enhance(img):
     """
-    Magic Pro AI - وضع خاص بالمستندات النصية.
-
-    الهدف:
-    1) خلفية بيضاء ناصعة.
-    2) النص داكن وواضح وقريب من النسخة الأصلية.
-    3) زيادة قوة الحرف من خلال زيادة التباين المحلي وليس Dilation،
-       حتى لا تتحول الحروف إلى Bold مصطنع.
-    4) الحفاظ على التفاصيل الدقيقة والدرجات الرمادية داخل الحروف.
+    Magic Pro AI - معالجة مستندات نصية:
+    نص أسود/داكن وواضح بدرجة إضافية مع الحفاظ على شكل الحروف،
+    وخلفية بيضاء نظيفة بدون تحويل الحروف إلى Bold بشكل مشوه.
     """
+
     if img is None:
         return None
 
-    # ------------------------------------------------------------
-    # 1. Gray + إزالة اختلاف الإضاءة من الورق
-    # ------------------------------------------------------------
     gray = (
         cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         if len(img.shape) == 3 else img.copy()
     )
-    gray = np.asarray(gray, dtype=np.uint8)
 
-    # تقدير إضاءة الورق. Kernel كبير حتى لا يدخل في تفاصيل الحروف.
-    background = cv2.GaussianBlur(gray, (0, 0), 35)
-    background = np.maximum(background.astype(np.float32), 1.0)
+    # 1) تصحيح الإضاءة وتفاوت لون الورقة.
+    gray_f = gray.astype(np.float32)
+    background = cv2.GaussianBlur(gray_f, (0, 0), 25)
+    background = np.maximum(background, 1.0)
 
-    # تصحيح الإضاءة مع الحفاظ على تفاصيل النص.
-    norm = (gray.astype(np.float32) / background) * 255.0
-    norm = np.clip(norm, 0, 255).astype(np.uint8)
+    normalized = (gray_f / background) * 255.0
+    normalized = np.clip(normalized, 0, 255).astype(np.uint8)
 
-    # ------------------------------------------------------------
-    # 2. Contrast محلي خفيف للنص
-    # ------------------------------------------------------------
-    # قيمة صغيرة حتى لا يصبح النص خشنًا.
+    # 2) Contrast خفيف يحافظ على التفاصيل الدقيقة.
     clahe = cv2.createCLAHE(
-        clipLimit=0.85,
-        tileGridSize=(16, 16)
+        clipLimit=0.90,
+        tileGridSize=(12, 12)
     )
-    local = clahe.apply(norm)
+    enhanced = clahe.apply(normalized)
 
-    # ------------------------------------------------------------
-    # 3. جعل الحروف الداكنة أغمق بوضوح
-    # ------------------------------------------------------------
-    # Gamma > 1 يضغط الدرجات الداكنة إلى أسفل بدون توسيع الحرف.
-    f = local.astype(np.float32) / 255.0
-    darkened = np.power(f, 1.28) * 255.0
+    # 3) جعل الخلفية البيضاء أكثر نقاءً.
+    # لا نؤثر على البكسلات الداكنة هنا.
+    result = enhanced.astype(np.float32)
 
-    # زيادة إضافية مدروسة فقط للدرجات التي تشبه النص.
-    # لا يوجد dilation ولا erosion، لذلك لا يتم توسيع الحروف.
-    text_mask = np.clip((220.0 - darkened) / 180.0, 0.0, 1.0)
-    text_mask = text_mask * text_mask * (3.0 - 2.0 * text_mask)
+    # 4) تغميق الحروف تدريجيًا.
+    # كلما كان البكسل أغمق، زادت نسبة التغميق.
+    # هذا يجعل الخط أثقل بصريًا بدون Dilation أو توسيع الحروف.
+    dark = np.clip((220.0 - result) / 220.0, 0.0, 1.0)
 
-    # كلما كان الجزء أغمق، نزيد سواده قليلًا.
-    emphasized = darkened - (18.0 * text_mask)
-    emphasized = np.clip(emphasized, 0, 255).astype(np.uint8)
+    # قوة إضافية للخط مقارنة بالنسخة السابقة.
+    # 0.22 عند المناطق الداكنة = تغميق واضح ولكن بدون تحويله إلى كتلة.
+    dark_strength = 0.22
+    result = result * (1.0 - dark * dark_strength)
 
-    # ------------------------------------------------------------
-    # 4. Sharpen للحواف - بدون زيادة أبعاد الحرف
-    # ------------------------------------------------------------
-    blur = cv2.GaussianBlur(emphasized, (0, 0), 0.65)
-    sharp = cv2.addWeighted(
-        emphasized, 1.45,
-        blur, -0.45,
-        0
-    )
+    # 5) تعزيز خفيف للحواف فقط.
+    # Unsharp Mask ضعيف حتى تصبح حواف الحروف واضحة دون زيادة سمكها.
+    base = np.clip(result, 0, 255).astype(np.uint8)
+    blur = cv2.GaussianBlur(base, (0, 0), 0.65)
+    sharp = cv2.addWeighted(base, 1.18, blur, -0.18, 0)
 
-    # مزج محافظ حتى لا تصبح الحروف خشنة.
-    result = cv2.addWeighted(
-        emphasized, 0.78,
-        sharp, 0.22,
-        0
-    )
+    result = sharp.astype(np.float32)
 
-    # ------------------------------------------------------------
-    # 5. خلفية بيضاء ناصعة
-    # ------------------------------------------------------------
-    # تحويل المناطق الفاتحة جدًا إلى 255.
-    # هذا لا يؤثر على الحروف الداكنة.
-    white_mask = result >= 232
+    # 6) أبيض ناصع للمناطق الفاتحة جدًا.
+    # نترك درجات الرمادي المتوسطة حتى لا تختفي تفاصيل الحروف.
+    white_mask = result >= 244
     result[white_mask] = 255
 
-    # تحويل المنطقة 218..232 تدريجيًا إلى الأبيض.
-    mid = (result >= 218) & (result < 232)
-    if np.any(mid):
-        vals = result[mid].astype(np.float32)
-        vals = 218.0 + ((vals - 218.0) / 14.0) * 37.0
-        result[mid] = np.clip(vals, 0, 255).astype(np.uint8)
+    # المناطق القريبة من الأبيض تُدفع تدريجيًا إلى الأبيض.
+    light = np.clip((result - 225.0) / 19.0, 0.0, 1.0)
+    light = light * light * (3.0 - 2.0 * light)
+    result = result * (1.0 - light) + 255.0 * light
 
-    # ------------------------------------------------------------
-    # 6. منع أي أثر رمادي بسيط في الورقة
-    # ------------------------------------------------------------
-    # فقط إذا كانت المنطقة فاتحة أصلًا؛ لا نلمس النص.
-    soft_white = (result >= 205) & (result < 218)
-    if np.any(soft_white):
-        vals = result[soft_white].astype(np.float32)
-        vals = vals + (255.0 - vals) * 0.45
-        result[soft_white] = np.clip(vals, 0, 255).astype(np.uint8)
+    result = np.clip(result, 0, 255).astype(np.uint8)
 
-    # ------------------------------------------------------------
-    # 7. تنظيف الحواف
-    # ------------------------------------------------------------
+    # 7) تنظيف الحواف الخارجية.
     h, w = result.shape
     margin_x = max(2, int(w * 0.006))
     margin_y = max(2, int(h * 0.006))
