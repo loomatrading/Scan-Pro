@@ -420,6 +420,9 @@ class InteractivePreview(QLabel):
         self.image = None
         self.base_image = None
         self.corners = None
+        # التحديد التفاعلي يظهر فقط في وضع Original
+        # ويختفي تماماً في وضع Magic Pro AI.
+        self.selection_enabled = True
         self.active_handle = -1
         self.eraser_active = False
         self.brush_size = 24
@@ -470,6 +473,14 @@ class InteractivePreview(QLabel):
         self.setCursor(
             Qt.BlankCursor if active else Qt.ArrowCursor
         )
+        self.update()
+
+    def set_selection_enabled(self, enabled):
+        """السماح بالتحديد اليدوي فقط في وضع Original."""
+        self.selection_enabled = bool(enabled)
+        self.active_handle = -1
+        if not enabled and not self.eraser_active:
+            self.setCursor(Qt.ArrowCursor)
         self.update()
 
     def get_disp_rect(self):
@@ -558,7 +569,8 @@ class InteractivePreview(QLabel):
         painter.drawPixmap(ox, oy, pix)
 
         if (
-            self.base_image is not None
+            self.selection_enabled
+            and self.base_image is not None
             and self.corners is not None
             and not self.eraser_active
         ):
@@ -717,6 +729,10 @@ class InteractivePreview(QLabel):
             self.erase_at(pos)
             return
 
+        # Magic Pro AI: الصورة عادية وغير قابلة لسحب/تحريك التحديد.
+        if not self.selection_enabled:
+            return
+
         if (
             self.base_image is None
             or self.corners is None
@@ -764,7 +780,8 @@ class InteractivePreview(QLabel):
             return
 
         if (
-            self.active_handle != -1
+            self.selection_enabled
+            and self.active_handle != -1
             and self.corners is not None
             and self.base_image is not None
         ):
@@ -1388,6 +1405,8 @@ class ScanPro(QMainWindow):
             return
 
         self.preview.set_eraser_mode(False)
+        # التحديد اليدوي متاح فقط في Original.
+        self.preview.set_selection_enabled(True)
 
         self.preview.set_data(
             self.original,
@@ -1424,6 +1443,8 @@ class ScanPro(QMainWindow):
             )
 
             self.preview.set_eraser_mode(False)
+            # Magic Pro AI يعرض النتيجة كصفحة عادية بدون أي مقابض أو خطوط تفاعلية.
+            self.preview.set_selection_enabled(False)
 
             self.preview.set_data(
                 self.magic,
@@ -1492,6 +1513,7 @@ class ScanPro(QMainWindow):
         self.pages.clear()
 
         self.preview.set_eraser_mode(False)
+        self.preview.set_selection_enabled(True)
         self.preview.set_data(
             None,
             None,
@@ -1509,11 +1531,27 @@ class ScanPro(QMainWindow):
             )
             return
 
-        image = (
-            self.preview.image
-            if self.preview.image is not None
-            else self.original
-        )
+        # في وضع Original يجب تطبيق التحديد اليدوي فعلياً على الملف المحفوظ.
+        # لا نحفظ الصورة الأصلية كاملة كما كان يحدث سابقاً.
+        if self.original_btn.button.property("selected") and self.corners is not None:
+            try:
+                image = perspective_transform(
+                    self.original,
+                    self.corners
+                )
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Save",
+                    f"Could not apply the selected page area:\n{exc}"
+                )
+                return
+        else:
+            image = (
+                self.preview.image
+                if self.preview.image is not None
+                else self.original
+            )
 
         # PNG هو الاختيار الافتراضي للمستندات النصية
         while True:
