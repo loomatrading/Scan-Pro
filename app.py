@@ -192,14 +192,14 @@ def document_ai_enhance(img):
 
     # قوة إضافية للخط مقارنة بالنسخة السابقة.
     # 0.22 عند المناطق الداكنة = تغميق واضح ولكن بدون تحويله إلى كتلة.
-    dark_strength = 0.22
+    dark_strength = 0.40
     result = result * (1.0 - dark * dark_strength)
 
     # 5) تعزيز خفيف للحواف فقط.
     # Unsharp Mask ضعيف حتى تصبح حواف الحروف واضحة دون زيادة سمكها.
     base = np.clip(result, 0, 255).astype(np.uint8)
     blur = cv2.GaussianBlur(base, (0, 0), 0.65)
-    sharp = cv2.addWeighted(base, 1.18, blur, -0.18, 0)
+    sharp = cv2.addWeighted(base, 1.27, blur, -0.27, 0)
 
     result = sharp.astype(np.float32)
 
